@@ -18,7 +18,7 @@ import {
   ScoredJobListing,
   SearchPipelineResult,
 } from './types';
-import { classifyUrl } from './classifier';
+import { classifyUrl, normalizeCareerHubIdentity } from './classifier';
 
 /**
  * Builds deterministic, targeted search queries based on user criteria.
@@ -151,6 +151,45 @@ export function rankCareerHubs(
 }
 
 /**
+ * Groups raw career-hub candidates by their canonical hub identity (e.g. lever:gohighlevel).
+ * For each unique hub identity, preserves the highest-relevance representative candidate
+ * (or cleaner base URL if tied), preventing multiple Search results from the same portal
+ * from consuming separate Agent runs.
+ */
+export function groupCareerHubs(
+  hubs: NormalizedSearchResult[],
+  preferences: UserPreferences
+): NormalizedSearchResult[] {
+  if (!hubs || hubs.length === 0) return [];
+
+  const groups = new Map<string, { best: NormalizedSearchResult; bestScore: number }>();
+
+  for (const item of hubs) {
+    const identity = normalizeCareerHubIdentity(item.url);
+    if (!identity) continue;
+
+    const score = scoreHubRelevance(item, preferences);
+
+    if (!groups.has(identity)) {
+      groups.set(identity, { best: item, bestScore: score });
+    } else {
+      const existing = groups.get(identity)!;
+      // Prefer candidate with higher relevance score;
+      // if scores tie, prefer base URL (shorter URL without long query params)
+      if (
+        score > existing.bestScore ||
+        (score === existing.bestScore && item.url.length < existing.best.url.length)
+      ) {
+        existing.best = item;
+        existing.bestScore = score;
+      }
+    }
+  }
+
+  return Array.from(groups.values()).map((g) => g.best);
+}
+
+/**
  * Main End-to-End Search Pipeline Orchestrator.
  * Connects TinyFish Search -> Classify -> TinyFish Fetch / Agent ->
  * Normalize -> Deduplicate -> Match -> Hard Filter -> Deterministic Rank.
@@ -165,6 +204,7 @@ export async function searchJobs(
     searchQueries: 0,
     directJobCandidates: 0,
     careerHubCandidates: 0,
+    uniqueCareerHubs: 0,
     fetchAttempted: 0,
     fetchedPages: 0,
     agentRuns: 0,
@@ -236,6 +276,8 @@ export async function searchJobs(
 
   stats.directJobCandidates = directJobCandidates.length;
   stats.careerHubCandidates = careerHubCandidates.length;
+  const uniqueCareerHubs = groupCareerHubs(careerHubCandidates, preferences);
+  stats.uniqueCareerHubs = uniqueCareerHubs.length;
 
   const candidateJobListings: JobListing[] = [];
   const handledUrls = new Set<string>();
@@ -281,7 +323,7 @@ export async function searchJobs(
   // 4. TinyFish Agent Phase (Dynamic Career Hubs)
   // -------------------------------------------------------------
   // Select top career hubs ranked by role, ATS, and keyword relevance
-  const rankedHubs = rankCareerHubs(careerHubCandidates, preferences);
+  const rankedHubs = rankCareerHubs(uniqueCareerHubs, preferences);
   const careerHubsForAgent = rankedHubs
     .filter((item) => !handledUrls.has(canonicalizeUrl(item.url)))
     .slice(0, 2); // Bounded concurrency: max 2 simultaneous Agent runs
@@ -418,6 +460,7 @@ export async function startSearchJobs(
     searchQueries: 0,
     directJobCandidates: 0,
     careerHubCandidates: 0,
+    uniqueCareerHubs: 0,
     fetchAttempted: 0,
     fetchedPages: 0,
     agentRuns: 0,
@@ -489,6 +532,8 @@ export async function startSearchJobs(
 
   stats.directJobCandidates = directJobCandidates.length;
   stats.careerHubCandidates = careerHubCandidates.length;
+  const uniqueCareerHubs = groupCareerHubs(careerHubCandidates, preferences);
+  stats.uniqueCareerHubs = uniqueCareerHubs.length;
 
   const candidateJobListings: JobListing[] = [];
   const handledUrls = new Set<string>();
@@ -532,7 +577,7 @@ export async function startSearchJobs(
   // -------------------------------------------------------------
   // 4. Asynchronous TinyFish Agent Phase (Dynamic Career Hubs)
   // -------------------------------------------------------------
-  const rankedHubs = rankCareerHubs(careerHubCandidates, preferences);
+  const rankedHubs = rankCareerHubs(uniqueCareerHubs, preferences);
   const careerHubsForAgent = rankedHubs
     .filter((item) => !handledUrls.has(canonicalizeUrl(item.url)))
     .slice(0, 2); // Concurrency cap: max 2 career hubs

@@ -2,6 +2,7 @@
 
 import React from 'react';
 import { Bot, CheckCircle2, AlertCircle, XCircle, Loader2 } from 'lucide-react';
+import { formatHubDisplayName } from '@/lib/pipeline/classifier';
 
 export interface ActiveAgentRunState {
   runId: string;
@@ -106,9 +107,14 @@ export function AgentStatusBanner({ runs, onCancelAll }: AgentStatusBannerProps)
             >
               <div className="flex items-center gap-2 min-w-0 mr-2">
                 <Bot className="w-3.5 h-3.5 text-purple-400 shrink-0" />
-                <span className="truncate font-mono text-zinc-300" title={run.url}>
-                  {formatDomain(run.url)}
-                </span>
+                <div className="min-w-0">
+                  <div className="truncate font-medium text-zinc-200" title={run.url}>
+                    {formatHubDisplayName(run.url) || formatDomain(run.url)}
+                  </div>
+                  <div className="truncate font-mono text-[10px] text-zinc-500" title={run.url}>
+                    {formatDomain(run.url)}
+                  </div>
+                </div>
               </div>
 
               <div className="shrink-0 flex items-center gap-1.5 font-mono text-[11px]">

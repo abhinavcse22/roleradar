@@ -12,7 +12,8 @@ export interface PipelineStats {
   searchResults: number;          // Total raw search results returned across all queries
   searchQueries?: number;         // Total search query vectors generated & executed
   directJobCandidates: number;    // Search results classified as direct job postings
-  careerHubCandidates: number;    // Search results classified as career hubs
+  careerHubCandidates: number;    // Raw search results classified as career hubs
+  uniqueCareerHubs?: number;      // Unique normalized career hubs after grouping by portal identity
   fetchAttempted?: number;        // Direct job pages dispatched to TinyFish Fetch
   fetchedPages: number;           // Direct job pages successfully fetched and verified (fetch completed)
   agentRuns: number;              // Compatibility field (alias for agentRunsCompleted)

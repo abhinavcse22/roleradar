@@ -203,6 +203,22 @@ roleradar/
 
 ---
 
+## Agent Candidate Selection & Hub Diversity
+
+TinyFish Agent is a high-capability, autonomous browser navigator. To maximize discovery efficiency, prevent duplicate work, and ensure broad coverage across different employers, RoleRadar enforces strict diversity and candidate deduplication rules before dispatching Agent runs:
+
+1. **Career Hub Identification**: Discovered URLs are classified by deterministic routing rules. Single job postings (e.g. `jobs.ashbyhq.com/sarvam/<uuid>`) route directly to TinyFish Fetch, while company career portals and ATS hubs (e.g. `jobs.lever.co/gohighlevel`, `jobs.ashbyhq.com/sarvam`) route to Agent evaluation.
+2. **Canonical Hub Identity Normalization (`normalizeCareerHubIdentity`)**: Search queries frequently return multiple URLs for the same company career portal differing only by trailing slashes, protocol, or query parameters:
+   - `https://jobs.lever.co/gohighlevel`
+   - `http://jobs.lever.co/gohighlevel/`
+   - `https://jobs.lever.co/gohighlevel?department=Product&team=Core`
+   All of these resolve to the single canonical entity key: `lever:gohighlevel`. Similarly, Greenhouse (`boards.greenhouse.io/{slug}` or `?for={slug}`), Ashby (`jobs.ashbyhq.com/{slug}`), Workday (`{company}.myworkdayjobs.com`), and company native career sites (`careers.sarvam.ai`, `sarvam.ai/careers`) resolve to canonical keys like `ashby:sarvam` or `company:sarvam.ai`.
+3. **Representative Candidate Grouping (`groupCareerHubs`)**: All discovered hub candidates are grouped by their normalized hub identity. For each unique company/portal, RoleRadar computes a multi-signal relevance score (matching role, location, keywords, and ATS type) and selects the single highest-scoring representative candidate (preferring the clean base URL in case of score ties).
+4. **Guaranteed Employer Diversity (Max 2 Distinct Hubs)**: RoleRadar dispatches at most **2 distinct career hubs** to TinyFish Agent concurrently, guaranteeing that each run explores a different company or portal. Under no circumstances can a single company occupy both Agent slots.
+5. **Truthful Candidate Telemetry**: The telemetry panel preserves full discovery provenance by displaying both raw discovered candidates (`stats.careerHubCandidates`) and the deduplicated entity count (`stats.uniqueCareerHubs`), e.g. `5 discovered · 2 unique hubs`.
+
+---
+
 ## 7. Matching and Ranking
 
 RoleRadar strictly rejects "black-box LLM percentages". Instead, every match score (0–100) is calculated deterministically across explicit, traceable dimensions with human-readable evidence.

@@ -112,6 +112,11 @@ export function PipelineSummary({ stats, executedAt }: PipelineSummaryProps) {
                 {stats.agentRunsStarted !== undefined && stats.agentRunsStarted > 0 && runningAgents > 0
                   ? `${runningAgents} running · ${stats.agentJobsExtracted ?? 0} jobs`
                   : `${stats.agentJobsExtracted ?? 0} jobs${stats.agentFailures > 0 ? ` · ${stats.agentFailures} fail` : ''}`}
+                {stats.uniqueCareerHubs !== undefined && (
+                  <div className="text-[9px] text-zinc-400 truncate mt-0.5">
+                    {stats.careerHubCandidates} discovered · {stats.uniqueCareerHubs} unique hubs
+                  </div>
+                )}
               </div>
             </div>
 
@@ -140,8 +145,16 @@ export function PipelineSummary({ stats, executedAt }: PipelineSummaryProps) {
             </div>
           </div>
 
-          {(filteredCount > 0 || stats.failedSources > 0) && (
+          {(filteredCount > 0 || stats.failedSources > 0 || (stats.careerHubCandidates !== undefined && stats.careerHubCandidates > 0)) && (
             <div className="pt-2 border-t border-zinc-800/60 space-y-1 text-xs text-zinc-500">
+              {stats.uniqueCareerHubs !== undefined && stats.careerHubCandidates !== undefined && stats.careerHubCandidates > 0 && (
+                <div className="flex items-center gap-2">
+                  <Bot className="w-3.5 h-3.5 text-purple-400 shrink-0" />
+                  <span>
+                    {stats.careerHubCandidates} career hub candidate{stats.careerHubCandidates !== 1 ? 's' : ''} discovered · grouped into {stats.uniqueCareerHubs} unique company portal{stats.uniqueCareerHubs !== 1 ? 's' : ''} for Agent selection.
+                  </span>
+                </div>
+              )}
               {filteredCount > 0 && (
                 <div className="flex items-center gap-2">
                   <Filter className="w-3.5 h-3.5 text-blue-400/80 shrink-0" />
