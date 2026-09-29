@@ -6,154 +6,106 @@ RoleRadar is a live job and internship discovery application built for the **Tin
 
 ---
 
-## 1. The Problem
+## Problem
 
 Modern job searching suffers from three pervasive issues:
 1. **Aggregator Decay & "Ghost Jobs"**: Major job portals index postings and leave them active weeks or months after positions are closed or filled.
 2. **Duplicate Clutter**: A single opening at an employer gets syndicated across LinkedIn, Indeed, Glassdoor, and third-party scrapers, forcing candidates to sift through identical listings with broken referral links.
 3. **Black-Box Matching**: Job seekers are presented with arbitrary "Match %" figures generated without explanation, leaving them unclear about whether visa sponsorship is supported, whether seniority requirements match their background, or why a role was flagged.
 
-RoleRadar solves this by pulling directly from live company careers pages and modern ATS portals (Ashby, Greenhouse, Lever, Workday) in real-time, verifying page contents, deduplicating across sources, and presenting clear, explainable match score breakdowns.
+RoleRadar solves this by pulling directly from live company careers pages and modern ATS portals (Ashby, Greenhouse, Lever, Workday) in real time, verifying page contents, deduplicating across sources, and presenting clear, explainable match score breakdowns.
 
 ---
 
+## Product
+
+RoleRadar provides a clean, intentional discovery experience for candidates:
+
+- **Customizable Candidate Preferences**:
+  - **Target Role** (Required): e.g. `Product Manager`, `Software Engineer`, `Marketing Manager`.
+  - **Target Location** (Required): e.g. `India`, `Bengaluru`, `Remote`, `United States`.
+  - **Keywords** (Optional): Comma-separated domain keywords, skills, or technologies (e.g. `AI`, `Python`, `SaaS`).
+  - **Seniority** (Optional): `Any`, `Entry`, `Mid`, `Senior`, `Lead`, `Executive`.
+  - **Work Mode** (Optional): `Any`, `Remote`, `Hybrid`, `On-site`.
+  - **Visa Preference** (Optional): `Any`, `Sponsorship required`, `No sponsorship required`.
+- **Live Discovery Feed**: Displays verified jobs with direct apply links, source provenance badges (`Discovered via Search • Verified via Fetch`), and live verification timestamps (`Verified 45s ago`).
+- **Instant Client-Side Filtering**: Refine visible results by match tier (90%+, 75%+, 60%+), work mode, or seniority instantly without re-fetching.
+- **Explainable Match Modal**: View clear breakdown scores across 7 dimensions along with transparent `✓` match reasons and `⚠` warnings.
+
 ---
 
-## 2. End-to-End Pipeline
+## Architecture
 
-Search discovers live sources. Fetch reads straightforward direct job postings. Agent handles dynamic career hubs and browser interaction. All results flow through one normalization, deduplication, and deterministic ranking layer.
+RoleRadar is built on Next.js 16 (App Router), TypeScript 5 (Strict Mode), and Tailwind CSS v4, with zero external database dependencies. State is streamed in real time to the browser via an asynchronous architecture.
+
+### End-to-End Pipeline
 
 ```
-Search
+Search (5 targeted vectors)
   ↓
 Classify
-  ├── Direct job → Fetch
-  └── Career hub → Agent
+  ├── Direct job → TinyFish Fetch (markdown extraction & active check)
+  └── Career hub → TinyFish Agent (autonomous browser navigation)
   ↓
-Normalize
+Normalize (Canonical JobListing schema)
   ↓
-Deduplicate
+Deduplicate (Multi-signal canonical URL & company/title fingerprinting)
   ↓
-Match
+Match & Filter (100-point deterministic scoring with hard eligibility filters)
   ↓
-Filter
-  ↓
-Rank
+Deterministic Rank (Score, role alignment, keyword coverage, freshness)
 ```
-
-### Discovery & Processing Stages
-
-1. **Search**: Targeted multi-query discovery across live ATS subdomains (Ashby, Greenhouse, Lever) and native company careers pages.
-2. **Classify**: Deterministic URL routing distinguishing direct job postings from career hub portals.
-3. **Fetch**: Full-browser reading of direct job posting pages into clean, token-efficient markdown.
-4. **Agent**: Autonomous browser navigation, interaction, and structured JSON extraction on dynamic career hubs.
-5. **Normalize**: Universal transformation of all incoming records into the canonical `JobListing` schema.
-6. **Deduplicate**: Canonical multi-signal deduplication merging duplicates across discovery vectors into authoritative records with audit provenance.
-7. **Match & Filter**: 100-point deterministic scoring against user preferences, filtering out ineligible listings.
-8. **Rank**: Deterministic ranking by match score, role alignment, and verification recency.
-
----
-
-## Asynchronous Agent Architecture
-
-### Overview
-In production job discovery, interactive browser workflows and dynamic career hubs (e.g. Lever, Ashby, Greenhouse company portals) may take substantially longer (60–180+ seconds) than simple HTTP search or fetch requests. RoleRadar decouples immediate discovery from deep browser automation using an **asynchronous Agent architecture**:
-
-1. **Search and Fetch provide the initial result set**: When a candidate initiates a search, TinyFish Search and TinyFish Fetch execute synchronously, returning verified direct job postings within 2–5 seconds.
-2. **Dynamic Career Hubs are submitted to TinyFish Agent asynchronously**: High-relevance candidate career hubs are submitted in parallel via `POST https://agent.tinyfish.ai/v1/automation/run-async`, returning unique `runId` descriptors without blocking the initial HTTP response.
-3. **The browser polls run status**: The frontend receives initial jobs and begins polling `GET /api/jobs/agent-status?runId=<id>` (which queries `GET https://agent.tinyfish.ai/v1/runs/{id}`) at a 5-second interval. An honest Agent status banner displays real-time progress (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`).
-4. **Completed Agent results merge smoothly**: As each Agent run completes, its structured positions are normalized, deduplicated with existing jobs (merging provenance and preserving highest-authority fields), rescored against user preferences, and reranked deterministically. Results update live in the UI without a page refresh.
-5. **Safe In-Flight Cancellation**: Starting a new search or clearing preferences automatically cancels pending Agent tasks via `POST /api/jobs/agent-cancel` (which triggers `POST https://agent.tinyfish.ai/v1/runs/{id}/cancel`).
-
-### Pipeline Progression Diagram
-```
-Search
- ↓
-Fetch
- ↓
-Initial results
- ↓
-Async Agent runs
- ↓
-Agent status polling
- ↓
-Merge
- ↓
-Deduplicate
- ↓
-Rescore
- ↓
-Rerank
-```
-
-### Why Agent is Asynchronous
-Interactive browser workflows may take substantially longer than simple Search/Fetch requests. Direct job postings can be scraped and markdown-extracted in milliseconds, but navigating client-rendered Single-Page Applications (SPAs), interacting with filter forms, and extracting open positions from dynamic career portals requires autonomous multi-step browser sessions. Making Agent execution asynchronous ensures candidates receive immediate, actionable results without waiting, while deep autonomous navigation continues enriching their feed in the background.
-
----
-
-## 3. Architecture
-
-RoleRadar is built on a modern, high-performance, and minimal tech stack:
-
-- **Framework**: Next.js 16 (App Router, Server-Sent Events, Route Handlers)
-- **Language**: TypeScript 5 (Strict Mode)
-- **Styling**: Tailwind CSS v4 (Clean, modern typography, zero bloat)
-- **Icons**: Lucide React
-- **Backend Orchestrator**: Server-side SSE route (`/api/discover`) streaming pipeline events to the client.
-- **Web Layer**: TinyFish official REST API endpoints:
-  - `GET https://api.search.tinyfish.ai`
-  - `POST https://api.fetch.tinyfish.ai`
-  - `POST https://agent.tinyfish.ai/v1/automation/run` (or `/run-sse`)
 
 ```
 roleradar/
 ├── src/
 │   ├── app/
 │   │   ├── api/
-│   │   │   └── discover/
-│   │   │       └── route.ts         # SSE streaming discovery endpoint
-│   │   ├── layout.tsx               # Root layout & typography
-│   │   ├── page.tsx                 # Main screen & interactive feed
-│   │   └── globals.css              # Theme styling
+│   │   │   ├── jobs/
+│   │   │   │   ├── search/start/route.ts  # Initiates Search/Fetch & dispatches async Agent
+│   │   │   │   ├── search/route.ts        # Synchronous search pipeline route
+│   │   │   │   ├── agent-status/route.ts  # Polls TinyFish Agent status by runId
+│   │   │   │   └── agent-cancel/route.ts  # Cancels in-flight Agent tasks
+│   │   │   ├── tinyfish/                  # Direct test wrappers for TinyFish endpoints
+│   │   │   └── health/route.ts            # Server health & API key verification
+│   │   ├── dev/tinyfish/page.tsx          # Interactive developer sandbox
+│   │   ├── layout.tsx                     # Root layout & theme configuration
+│   │   └── page.tsx                       # Main product interface & live feed
 │   ├── components/
-│   │   ├── PreferenceForm.tsx       # User criteria form
-│   │   ├── PipelineTracker.tsx      # Real-time TinyFish pipeline visualizer
-│   │   ├── JobCard.tsx              # Job card with explainable match badges
-│   │   └── FilterSortBar.tsx        # In-memory instant filtering & sorting
+│   │   ├── SearchForm.tsx                 # Preference inputs with quick filters
+│   │   ├── JobCard.tsx                    # Detailed job card with match badges
+│   │   ├── AgentStatusBanner.tsx          # Real-time background task progress
+│   │   └── PipelineSummary.tsx            # Transparent 5-stage telemetry panel
 │   └── lib/
-│       ├── tinyfish/
-│       │   ├── search.ts            # TinyFish Search discovery client
-│       │   ├── fetch.ts             # TinyFish Fetch page reader client
-│       │   ├── agent.ts             # TinyFish Agent structured automation client
-│       │   └── types.ts             # Core data contracts & schemas
-│       ├── matching/
-│       │   └── scoring.ts           # Multi-dimensional explainable matching
-│       ├── dedup/
-│       │   └── deduplicate.ts       # Canonical hashing and multi-source merge
-│       └── normalize/
-│           └── jobNormalizer.ts     # Schema normalization & parsing
-├── .env.example                     # Environment template
-├── AGENTS.md                        # AI coding assistant guidelines
-└── README.md                        # Documentation
+│       ├── tinyfish/                      # Official TinyFish Search, Fetch, Agent clients
+│       ├── jobs/                          # Normalization and deduplication engines
+│       ├── matching/                      # Deterministic explainable scoring engine
+│       └── pipeline/                      # Search orchestrator, classifier, hub diversity
+├── tests/                                 # 104 automated tests covering all features
+├── AGENTS.md                              # Core guidelines and engineering rules
+├── DEMO.md                                # 60–90 second evaluation walkthrough
+├── SUBMISSION.md                          # Official bounty submission report
+└── README.md                              # Complete product documentation
 ```
 
 ---
 
-## 4. TinyFish Search Usage
+## Search
 
 - **Endpoint**: `GET https://api.search.tinyfish.ai`
 - **Headers**: `X-API-Key: $TINYFISH_API_KEY`
-- **Purpose**: High-velocity discovery of fresh, live job opportunities and career hubs.
-- **Query Strategy**: Rather than one generic search, RoleRadar generates targeted query matrices:
-  - `"{role}" "{location}" {keywords} site:jobs.ashbyhq.com`
-  - `"{role}" "{location}" {keywords} site:boards.greenhouse.io`
-  - `"{role}" "{location}" {keywords} site:jobs.lever.co`
-  - `"{role}" "{location}" careers open positions`
+- **Purpose**: High-velocity discovery of fresh, live job opportunities and career portals.
+- **Query Strategy**: Rather than one generic search query, RoleRadar dynamically generates 5 targeted search vectors based on user criteria:
+  1. `"{role}" "{location}" {keywords} site:jobs.ashbyhq.com`
+  2. `"{role}" "{location}" {keywords} site:boards.greenhouse.io`
+  3. `"{role}" "{location}" {keywords} site:jobs.lever.co`
+  4. `"{role}" "{location}" {keywords} ("join our team" OR "work with us" OR "careers")`
+  5. `"{role}" "{location}" {keywords} "open positions"`
 - **Output**: Ranked array of live URLs, domain sources, page titles, and real snippets.
 
 ---
 
-## 5. TinyFish Fetch Usage
+## Fetch
 
 - **Endpoint**: `POST https://api.fetch.tinyfish.ai`
 - **Headers**: `X-API-Key: $TINYFISH_API_KEY`, `Content-Type: application/json`
@@ -161,18 +113,19 @@ roleradar/
 - **Purpose**: Full-browser execution that converts candidate job pages into clean, token-efficient markdown.
 - **What it accomplishes**:
   - Strips ads, cookie banners, navigation menus, and scripts.
-  - Verifies whether the job posting is active or expired ("This job has expired", "No longer accepting applications").
+  - Verifies whether the job posting is active or expired (*"This job has expired"*, *"No longer accepting applications"*).
   - Extracts raw job description, requirements list, responsibilities, compensation, and visa sponsorship statements.
+  - Extracts authoritative direct apply URLs.
 
 ---
 
-## 6. TinyFish Agent Usage
+## Agent
 
-- **Endpoint**: `POST https://agent.tinyfish.ai/v1/automation/run` (or `/run-sse`)
+- **Endpoint**: `POST https://agent.tinyfish.ai/v1/automation/run-async` (or `/run`)
 - **Headers**: `X-API-Key: $TINYFISH_API_KEY`, `Content-Type: application/json`
-- **Purpose**: Deep interaction and structured extraction for complex, dynamic career hubs.
+- **Purpose**: Deep autonomous interaction and structured extraction for complex, dynamic career hubs.
 - **When it triggers**:
-  - TinyFish Agent is **not** wasted on static pages. It is selectively dispatched to dynamic career search portals (such as company-specific interactive job boards or multi-step career search forms) that require client-side interaction, search filtering, or pagination.
+  - TinyFish Agent is **not** wasted on static pages. It is selectively dispatched to dynamic career portals (such as company-specific interactive job boards or multi-step career search forms) that require client-side interaction, search filtering, or pagination.
 - **Goal Definition**: Natural language instruction:
   - `"Find open ${seniority} ${role} positions in ${location}. Extract the exact job title, location, employment type, requirements, and direct application URL."`
 - **Strict Output Schema**:
@@ -203,6 +156,66 @@ roleradar/
 
 ---
 
+## Normalization and Deduplication
+
+Search, Fetch, and Agent can discover the same opening through different URLs or representations. RoleRadar converts all source records into one canonical `JobListing` model and deterministically deduplicates them using normalized URLs and company/title/location fingerprints.
+
+### Canonical Multi-Signal Deduplication
+1. **Normalized Canonical URL**: Strips tracking parameters (`utm_*`, `gh_src`, `ref`, `fbclid`), trailing slashes, and anchor hashes while preserving meaningful route IDs.
+2. **Company Fingerprinting**: Normalizes corporate designations (`Inc`, `LLC`, `Pvt Ltd`, `Corp`) and casing (`"Sarvam AI, Inc."` &rarr; `"sarvam ai"`).
+3. **Exact Title Alignment**: Strict title matching distinguishes distinct levels (`Product Manager` vs `Senior Product Manager`).
+4. **Location Compatibility**: Geographic comparison prevents merging disparate office locations (`Bengaluru` vs `London`).
+
+### Deterministic Merging
+When multiple records represent the same role (e.g. Search snippet + Fetch page content + Agent structured data), RoleRadar combines them without data loss:
+- **Title & Company**: Authoritative representation preserved.
+- **Description**: Longest, most informative markdown text retained (with raw markdown headers stripped).
+- **Requirements & Keywords**: Union set of all unique requirements and detected skills.
+- **Apply URL**: Prefers authentic, direct ATS endpoints (`ashbyhq.com`, `greenhouse.io`, `/apply`).
+- **Provenance**: Records the entire discovery history across all contributing pipeline stages.
+
+---
+
+## Matching and Ranking
+
+RoleRadar strictly rejects "black-box LLM percentages". Instead, every match score (0–100) is calculated deterministically across explicit, traceable dimensions with human-readable evidence.
+
+### Neutral Dimensions & Dynamic Denominator Normalization
+Unspecified preferences are neutral and do not contribute points. The final percentage is normalized across the preferences the user actually specified, preventing broad searches with many 'Any' fields from producing artificially inflated scores.
+
+- **Formula**:
+  $$\text{Score} = \min\left(100, \max\left(0, \text{round}\left(\frac{\sum \text{Earned Points on Applicable Dimensions}}{\sum \text{Maximum Points of Applicable Dimensions}} \times 100\right)\right)\right)$$
+  For example, with `Role: PM`, `Location: India`, `Keywords: AI`, and all other preferences set to `Any`, the applicable maximum is $30 + 20 + 20 + 5 = 75$. If a job earns $30 + 20 + 15 + 5 = 70$, its displayed normalized score is $\text{round}(70 / 75 \times 100) = 93\%$.
+
+### Dimension Weights
+- **Role Fit (30 pts)**: Exact match (30), seniority-variant match (23), specialized variant (27), adjacent role (14), partial word match (8).
+- **Location Fit (20 pts)**: Exact city match (20), country match (20 if country requested, 15 if specific city requested), remote match (20 if remote requested, 14 if country requested), undisclosed location (6).
+- **Keyword Coverage (20 pts)**: Proportional match across all requested skills and tools.
+- **Seniority (10 pts)**: Exact match (10), 1-level variance (5), 2+ level variance (0). Neutral (0 pts, excluded from denominator) if `Any`.
+- **Work Mode (10 pts)**: Exact match (10), remote vs hybrid variance (5). Neutral if `Any`.
+- **Visa Sponsorship (5 pts)**: Confirmed sponsorship (5), unknown (2), incompatible (0). Neutral if `Any`.
+- **Freshness (5 pts)**: Verified < 2 hours (5), < 24 hours (4), < 7 days (3), older (1).
+
+### Hard Eligibility Filters
+A job is marked `eligible: false` and excluded if:
+1. Role alignment is zero or below threshold.
+2. Explicit location incompatibility (e.g. *London, UK* when *India* was requested).
+3. Closed or expired postings.
+
+---
+
+## Async Agent Architecture
+
+In production job discovery, interactive browser workflows and dynamic career hubs (e.g. Lever, Ashby, Greenhouse company portals) may take substantially longer (60–180+ seconds) than simple HTTP search or fetch requests. RoleRadar decouples immediate discovery from deep browser automation using an **asynchronous Agent architecture**:
+
+1. **Search and Fetch provide the initial result set**: When a candidate initiates a search, TinyFish Search and TinyFish Fetch execute synchronously, returning verified direct job postings within 2–4 seconds.
+2. **Dynamic Career Hubs are submitted to TinyFish Agent asynchronously**: High-relevance candidate career hubs are submitted in parallel via `POST https://agent.tinyfish.ai/v1/automation/run-async`, returning unique `runId` descriptors without blocking the initial HTTP response.
+3. **The browser polls run status**: The frontend receives initial jobs and begins polling `GET /api/jobs/agent-status?runId=<id>` (which queries `GET https://agent.tinyfish.ai/v1/runs/{id}`) at a 5-second interval. An honest Agent status banner displays real-time progress (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`).
+4. **Completed Agent results merge smoothly**: As each Agent run completes, its structured positions are normalized, deduplicated with existing jobs (merging provenance and preserving highest-authority fields), rescored against user preferences, and reranked deterministically. Results update live in the UI without a page refresh.
+5. **Safe In-Flight Cancellation**: Starting a new search or clearing preferences automatically cancels pending Agent tasks via `POST /api/jobs/agent-cancel` (which triggers `POST https://agent.tinyfish.ai/v1/runs/{id}/cancel`).
+
+---
+
 ## Agent Candidate Selection & Hub Diversity
 
 TinyFish Agent is a high-capability, autonomous browser navigator. To maximize discovery efficiency, prevent duplicate work, and ensure broad coverage across different employers, RoleRadar enforces strict diversity and candidate deduplication rules before dispatching Agent runs:
@@ -215,81 +228,36 @@ TinyFish Agent is a high-capability, autonomous browser navigator. To maximize d
    All of these resolve to the single canonical entity key: `lever:gohighlevel`. Similarly, Greenhouse (`boards.greenhouse.io/{slug}` or `?for={slug}`), Ashby (`jobs.ashbyhq.com/{slug}`), Workday (`{company}.myworkdayjobs.com`), and company native career sites (`careers.sarvam.ai`, `sarvam.ai/careers`) resolve to canonical keys like `ashby:sarvam` or `company:sarvam.ai`.
 3. **Representative Candidate Grouping (`groupCareerHubs`)**: All discovered hub candidates are grouped by their normalized hub identity. For each unique company/portal, RoleRadar computes a multi-signal relevance score (matching role, location, keywords, and ATS type) and selects the single highest-scoring representative candidate (preferring the clean base URL in case of score ties).
 4. **Guaranteed Employer Diversity (Max 2 Distinct Hubs)**: RoleRadar dispatches at most **2 distinct career hubs** to TinyFish Agent concurrently, guaranteeing that each run explores a different company or portal. Under no circumstances can a single company occupy both Agent slots.
-5. **Truthful Candidate Telemetry**: The telemetry panel preserves full discovery provenance by displaying both raw discovered candidates (`stats.careerHubCandidates`) and the deduplicated entity count (`stats.uniqueCareerHubs`), e.g. `5 discovered · 2 unique hubs`.
+5. **Truthful Candidate Telemetry**: The telemetry panel preserves full discovery provenance by displaying both raw discovered candidates (`stats.careerHubCandidates`) and the deduplicated entity count (`stats.uniqueCareerHubs`), e.g. `8 discovered · 7 unique hubs`.
 
 ---
 
-## 7. Matching and Ranking
+## Pipeline Telemetry
 
-RoleRadar strictly rejects "black-box LLM percentages". Instead, every match score (0–100) is calculated deterministically across explicit, traceable dimensions with human-readable evidence.
+RoleRadar provides an honest, transparent breakdown of exactly what happened during discovery:
 
-### Neutral Dimensions & Dynamic Denominator Normalization
-
-Unspecified preferences are neutral and do not contribute points. The final percentage is normalized across the preferences the user actually specified, preventing broad searches with many 'Any' fields from producing artificially inflated scores.
-
-- **Neutral Dimensions**: When a preference is unspecified (e.g. `Seniority: Any`, `Work Mode: Any`, `Visa: Any`, or empty keywords), its earned points are `0`, no noisy warnings are generated, and its maximum points are excluded from the denominator.
-- **Normalization Formula**:
-  $$\text{Score} = \min\left(100, \max\left(0, \text{round}\left(\frac{\sum \text{Earned Points on Applicable Dimensions}}{\sum \text{Maximum Points of Applicable Dimensions}} \times 100\right)\right)\right)$$
-  For example, with `Role: PM`, `Location: India`, `Keywords: AI`, and all other preferences set to `Any`, the applicable maximum is $30 + 20 + 20 + 5 = 75$. If a job earns $30 + 20 + 15 + 5 = 70$, its displayed normalized score is $\text{round}(70 / 75 \times 100) = 93\%$.
-
-### Deterministic Dimension Weights & Differentiation
-
-| Dimension | Max Points | Applicability | Description & Criteria |
-|---|:---:|:---:|---|
-| **Role Match** | 30 | Always | Normalized token and phrase alignment. Exact title phrase: **30 pts**; exact role with specialization (e.g. "Product Manager, Growth"): **27 pts**; seniority variant (e.g. "Senior Product Manager"): **24 pts**; related role ("Product Owner"): **18 pts**; adjacent discipline ("Product Analyst"): **12 pts**; unrelated: **0 pts & ineligible**. |
-| **Location Match** | 20 | Always | Matches requested city or country. Requested city match: **20 pts**; country match when city requested: **18 pts**; country-level match: **20 pts**; remote compatible: **18 pts**; undisclosed: **6 pts**; mismatch: **0 pts & ineligible**. |
-| **Keywords Match** | 20 | User specified | Evidence-based word-boundary matching across title, description, and requirements. Neutral (0 pts, excluded from denominator) if user provides no keywords. |
-| **Seniority Match** | 10 | Real level specified | Matches requested seniority level (10 pts), adjacent levels (8 pts), or unknown (6 pts). Penalizes gaps with explanatory warnings. Neutral (0 pts, excluded from denominator) when set to "Any". |
-| **Work Mode Match** | 10 | Policy specified | Matches Remote, Hybrid, and On-site policies. Incompatible policies receive reduced points and explanatory warnings. Neutral (0 pts, excluded from denominator) when set to "Any". |
-| **Visa Sponsorship** | 5 | Sponsorship required | Confirmed sponsorship: **5 pts**; unspecified/unknown: **2 pts** with warning; explicitly unavailable: **0 pts**. Neutral (0 pts, excluded from denominator) when set to "Any" or "No sponsorship required". |
-| **Freshness** | 5 | Always | Recency of live verification: verified within 1h (**5 pts**), 24h (**4 pts**), 3 days (**3 pts**), 7 days (**2 pts**), or older (**1 pt**). |
-
-### Hard Filters (`eligible: false`)
-A job is flagged as ineligible if any of the following critical mismatches occur:
-1. **Unrelated Role**: Role token overlap is 0 (e.g. *Software Engineer* when *Product Manager* was requested).
-2. **Explicit Location Incompatibility**: The position is strictly in an incompatible geographic region (e.g. *London, UK* when *India* was requested).
-3. **Closed or Expired Postings**: The page content contains closed indicators (e.g. *"no longer accepting applications"*, *"job has expired"*).
-
-*Note: Seniority gaps, missing keywords, and unspecified visa policies affect the score and trigger warnings, but do not make a job ineligible.*
-
-### Deterministic Sorting Order
-1. **Match Score** descending
-2. **Role Score** descending
-3. **Keyword Evidence** descending
-4. **Freshness Score** descending
-5. **Alphabetical Tie-Breaker** (title + company ascending)
-
-### Explainable Evidence Tags
-- `✓ Exact role match for "Product Manager"`
-- `✓ Location matches requested city: "Bengaluru, India"`
-- `✓ Keywords matched: AI, SaaS`
-- `⚠ Keywords not found: Kubernetes`
-- `⚠ Job requests 3–7 years of experience (Senior)`
-- `⚠ Visa sponsorship not specified in listing`
+| Metric | Meaning | Source |
+|---|---|---|
+| `searchResults` | Total raw search results returned across all 5 query vectors | TinyFish Search |
+| `searchQueries` | Total search query vectors generated & executed (5) | Pipeline generator |
+| `directJobCandidates` | Discovered URLs classified as direct job postings | Classifier (`directJob`) |
+| `careerHubCandidates` | Raw discovered URLs classified as company career hubs | Classifier (`careerHub`) |
+| `uniqueCareerHubs` | Distinct company portals after canonical hub identity grouping | `groupCareerHubs` |
+| `fetchAttempted` | Direct job pages dispatched to TinyFish Fetch (capped at 6) | Fetch queue |
+| `fetchedPages` | Direct job pages successfully fetched and verified | Fetch responses |
+| `agentRunsStarted` | Asynchronous Agent tasks submitted to TinyFish | Agent async runner |
+| `agentRunsCompleted` | Agent runs that finished successfully with valid extraction | Agent polling |
+| `agentFailures` | Agent runs that timed out, encountered errors, or failed | Agent polling |
+| `agentJobsExtracted` | Total valid job records extracted by completed Agent runs | Agent extraction |
+| `normalizedJobs` | Canonical JobListing records produced before deduplication | Normalizer |
+| `uniqueJobs` | Authoritative jobs remaining after multi-signal deduplication | Deduplicator |
+| `eligibleJobs` | Unique jobs that passed hard preference filters | Matcher (`eligible: true`) |
+| `filteredJobs` | Unique jobs rejected by hard preference filters (`unique - eligible`) | Matcher (`eligible: false`) |
+| `failedSources` | Network source timeouts or unavailable URLs handled gracefully | Error handler |
 
 ---
 
-## 8. Job Normalization and Deduplication
-
-Search, Fetch, and Agent can discover the same opening through different URLs or representations. RoleRadar therefore converts all source records into one canonical `JobListing` model and deterministically deduplicates them using normalized URLs and company/title/location fingerprints.
-
-### Canonical Multi-Signal Deduplication
-1. **Normalized Canonical URL**: Strips tracking parameters (`utm_*`, `gh_src`, `ref`, `fbclid`), trailing slashes, and anchor hashes while preserving meaningful route IDs.
-2. **Company Fingerprinting**: Normalizes corporate designations (`Inc`, `LLC`, `Pvt Ltd`, `Corp`) and casing (`"Sarvam AI, Inc."` &rarr; `"sarvam ai"`).
-3. **Exact Title Alignment**: Strict title matching distinguishes distinct levels (`Product Manager` vs `Senior Product Manager`).
-4. **Location Compatibility**: Geographic comparison prevents merging disparate office locations (`Bengaluru` vs `London`).
-
-### Deterministic Merging
-When multiple records represent the same role (e.g. Search snippet + Fetch page content + Agent structured data), RoleRadar combines them without data loss:
-- **Title & Company**: Authoritative representation preserved.
-- **Description**: Longest, most informative markdown text retained.
-- **Requirements & Keywords**: Union set of all unique requirements and detected skills.
-- **Apply URL**: Prefers authentic, direct ATS endpoints (`ashbyhq.com`, `greenhouse.io`, `/application`).
-- **Provenance**: Records the entire discovery history across all contributing pipeline stages.
-
----
-
-## 9. Setup & Installation
+## Setup & Installation
 
 ### Prerequisites
 - Node.js 18+ (tested on Node v25)
@@ -332,7 +300,7 @@ When multiple records represent the same role (e.g. Search snippet + Fetch page 
 
 ---
 
-## 10. Environment Variables
+## Environment Variables
 
 | Variable | Description | Required | Default |
 |---|---|---|---|
@@ -343,15 +311,36 @@ When multiple records represent the same role (e.g. Search snippet + Fetch page 
 
 ---
 
-## 11. Limitations
+## Testing
 
-- **Rate Limits**: TinyFish Search and Fetch have generous per-minute limits, while Agent requests are metered. RoleRadar implements concurrency pacing to stay within account limits.
-- **Bot Defense on Legacy Portals**: While TinyFish handles standard bot mitigation, portals requiring mandatory multi-factor authentication or reCAPTCHA v3 enterprise checkboxes may require custom session persistence.
-- **ATS Custom Fields**: Some non-standard ATS deployments embed application questions within iframe wrappers that require deeper Agent exploration.
+RoleRadar includes an extensive automated test suite covering all pipeline, matching, deduplication, telemetry, and UX components:
+
+```bash
+# Run all unit and integration tests (104 tests)
+npm test
+
+# Run ESLint check
+npm run lint
+
+# Run production build and type checking
+npm run build
+```
+
+### Test Suite Structure
+- `tests/hub_diversity.test.ts` (14 tests): Hub identity normalization, portal candidate grouping, diversity constraints, and formatted display names.
+- `tests/telemetry.test.ts` (12 tests): Telemetry accuracy, distinct started vs completed counts, server state isolation.
+- `tests/ux_components.test.ts` (13 tests): Job card rendering, provenance labels, time-ago formatting, markdown cleaning.
+- `tests/matching.test.ts` (19 tests): 100-point scoring, neutral dimension handling, dynamic denominator normalization, hard filters.
+- `tests/data_quality.test.ts` (7 tests): Heading stripping, structured location isolation, requirement bullets extraction.
+- `tests/async_agent.test.ts` (10 tests): Async start/status/cancel route lifecycle and state transitions.
+- `tests/agent_execution.test.ts` (7 tests): Agent schema enforcement, SSE streaming parsing, structured extraction.
+- `tests/pipeline.test.ts` (11 tests): End-to-end classification, error isolation, sorting, query generation.
+- `tests/jobs.test.ts` (10 tests): Deduplication, canonical URL parsing, multi-source provenance merging.
+- `tests/integration_shapes.test.ts` (1 test): Real TinyFish API response shapes normalization.
 
 ---
 
-## 12. How This Satisfies the Bounty
+## Bounty Qualification
 
 RoleRadar directly satisfies every requirement of the **TinyFish Technical Student Bounty Drop 001 — Job Portal / Careers Finder**:
 
