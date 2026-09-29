@@ -381,11 +381,15 @@ export async function searchJobs(
     if (b.match.breakdown.role !== a.match.breakdown.role) {
       return b.match.breakdown.role - a.match.breakdown.role;
     }
-    // 3. Freshness score descending
+    // 3. Keyword evidence descending
+    if (b.match.breakdown.keywords !== a.match.breakdown.keywords) {
+      return b.match.breakdown.keywords - a.match.breakdown.keywords;
+    }
+    // 4. Freshness score descending
     if (b.match.breakdown.freshness !== a.match.breakdown.freshness) {
       return b.match.breakdown.freshness - a.match.breakdown.freshness;
     }
-    // 4. Stable tie-breaker: title + company
+    // 5. Stable tie-breaker: title + company
     const keyA = `${a.title} ${a.company}`.toLowerCase();
     const keyB = `${b.title} ${b.company}`.toLowerCase();
     return keyA.localeCompare(keyB);
@@ -616,6 +620,9 @@ export async function startSearchJobs(
     }
     if (b.match.breakdown.role !== a.match.breakdown.role) {
       return b.match.breakdown.role - a.match.breakdown.role;
+    }
+    if (b.match.breakdown.keywords !== a.match.breakdown.keywords) {
+      return b.match.breakdown.keywords - a.match.breakdown.keywords;
     }
     if (b.match.breakdown.freshness !== a.match.breakdown.freshness) {
       return b.match.breakdown.freshness - a.match.breakdown.freshness;

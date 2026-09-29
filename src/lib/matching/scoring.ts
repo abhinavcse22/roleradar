@@ -18,6 +18,7 @@ function tokenizeRole(role: string): string[] {
 
 /**
  * 1. Role Match (Max 30 Points)
+ * Distinguishes exact role phrases, specializations, seniority variants, and adjacent disciplines.
  */
 export function scoreRole(
   jobTitle: string,
@@ -30,7 +31,7 @@ export function scoreRole(
   const normTitle = normalizeText(jobTitle);
   const normUserRole = normalizeText(userRole);
 
-  // Exact match
+  // 1. Exact match (e.g. "Product Manager" === "Product Manager")
   if (normTitle === normUserRole) {
     return {
       score: 30,
@@ -53,16 +54,98 @@ export function scoreRole(
 
   const overlapRatio = matchedTokens.length / userTokens.length;
 
-  if (overlapRatio === 1) {
-    // All user role words found (e.g. "Product Manager" in "Product Manager, Growth")
+  // Seniority modifier regex
+  const hasSeniorityModifier =
+    /\b(senior|sr\.?|lead|principal|staff|director|head of|vp|associate|junior|jr\.?|intern|entry)\b/i.test(
+      jobTitle
+    );
+
+  // Weak/adjacent discipline indicator
+  const hasAdjacentDiscipline =
+    /\b(analyst|operations|ops|marketing|designer|architect|coordinator|specialist|assistant)\b/i.test(
+      jobTitle
+    );
+
+  // Check if jobTitle contains the exact role phrase
+  const escapedUserRole = normUserRole.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const exactPhraseContained = new RegExp(`\\b${escapedUserRole}\\b`, 'i').test(normTitle);
+
+  if (exactPhraseContained) {
+    if (hasAdjacentDiscipline) {
+      return {
+        score: 14,
+        warning: `Weak role alignment: "${jobTitle}" is adjacent to requested "${userRole}"`,
+        isMismatch: false,
+      };
+    }
+
+    if (hasSeniorityModifier) {
+      const tokensWithoutSeniorityOrRole = titleTokens.filter(
+        (t) =>
+          !userTokens.includes(t) &&
+          !/^(senior|sr|lead|principal|staff|director|head|vp|associate|junior|jr|intern|entry)$/i.test(t)
+      );
+
+      if (tokensWithoutSeniorityOrRole.length > 0) {
+        return {
+          score: 23,
+          reason: `Role matches "${userRole}" with seniority & specialization "${jobTitle}"`,
+          isMismatch: false,
+        };
+      }
+
+      return {
+        score: 24,
+        reason: `Role matches "${userRole}" with seniority level "${jobTitle}"`,
+        isMismatch: false,
+      };
+    }
+
     return {
-      score: 28,
-      reason: `Role matches "${userRole}" in "${jobTitle}"`,
+      score: 27,
+      reason: `Role matches "${userRole}" with specialization "${jobTitle}"`,
       isMismatch: false,
     };
-  } else if (overlapRatio >= 0.6) {
+  }
+
+  // All tokens matched, but phrase wasn't contiguous or was formatted differently
+  if (overlapRatio === 1) {
+    if (hasAdjacentDiscipline) {
+      return {
+        score: 14,
+        warning: `Weak role alignment: "${jobTitle}" is adjacent to requested "${userRole}"`,
+        isMismatch: false,
+      };
+    }
     return {
-      score: 20,
+      score: 26,
+      reason: `Role aligns with "${userRole}" in "${jobTitle}"`,
+      isMismatch: false,
+    };
+  }
+
+  // Check for strong related product titles, e.g. "Product Owner", "Product Lead"
+  if (normUserRole.includes('product') && normTitle.includes('product')) {
+    if (/\b(owner|lead|head)\b/i.test(jobTitle) && !hasAdjacentDiscipline) {
+      return {
+        score: 18,
+        reason: `Related role "${jobTitle}" aligns with "${userRole}"`,
+        isMismatch: false,
+      };
+    }
+  }
+
+  if (hasAdjacentDiscipline && overlapRatio >= 0.5) {
+    return {
+      score: 12,
+      warning: `Weak role alignment: "${jobTitle}" is adjacent to requested "${userRole}"`,
+      isMismatch: false,
+    };
+  }
+
+  if (overlapRatio >= 0.6) {
+    return {
+      score: 18,
       reason: `Role partially matches "${userRole}" (${matchedTokens.join(', ')})`,
       isMismatch: false,
     };
@@ -74,6 +157,7 @@ export function scoreRole(
     };
   }
 
+  // 0 overlap -> Ineligible
   return {
     score: 0,
     warning: `Job title "${jobTitle}" does not match requested role "${userRole}"`,
@@ -83,6 +167,7 @@ export function scoreRole(
 
 /**
  * 2. Location Match (Max 20 Points)
+ * Distinguishes requested city, requested country, remote compatibility, and unknown locations.
  */
 export function scoreLocation(
   jobLocation: string,
@@ -93,52 +178,161 @@ export function scoreLocation(
   const normUserLoc = normalizeText(userLocation);
   const normJobLoc = normalizeText(jobLocation);
 
-  // If user has no specific location or asks for remote
+  // If user has no specific location or asks for remote/any
   if (!normUserLoc || normUserLoc === 'any' || normUserLoc === 'remote') {
     return { score: 20, reason: 'Location open / flexible', isMismatch: false };
-  }
-
-  // If job is explicitly Remote
-  if (jobWorkMode === 'Remote' || normJobLoc.includes('remote')) {
-    return {
-      score: 20,
-      reason: 'Role is remote and compatible with your location',
-      isMismatch: false,
-    };
   }
 
   // If location is unknown/undisclosed
   if (!normJobLoc || normJobLoc === 'undisclosed' || normJobLoc === 'unknown') {
     return {
-      score: 8,
+      score: 6,
       warning: 'Location not specified in posting',
       isMismatch: false,
     };
   }
 
-  // Geographic comparison
-  const countryMatches =
-    jobCountry && normalizeText(jobCountry) === normUserLoc;
-  const directMatch =
-    normJobLoc.includes(normUserLoc) || normUserLoc.includes(normJobLoc);
-
   const displayLoc =
     jobLocation.length > 50 ? `${jobLocation.slice(0, 50).trim()}...` : jobLocation;
 
-  if (directMatch || countryMatches) {
-    const locExplanation =
-      countryMatches && !directMatch && jobCountry
-        ? `Location matches country: ${jobCountry}`
-        : `Location matches "${displayLoc}"`;
+  // Is the job explicitly remote?
+  const isJobRemote = jobWorkMode === 'Remote' || normJobLoc.includes('remote');
 
+  // Parse user requested parts before punctuation stripping
+  const userParts = (userLocation || '')
+    .split(',')
+    .map((p) => normalizeText(p))
+    .filter(Boolean);
+  const knownCountries = new Set([
+    'india',
+    'us',
+    'usa',
+    'united states',
+    'uk',
+    'united kingdom',
+    'germany',
+    'canada',
+    'australia',
+    'singapore',
+  ]);
+  const hasSpecificCityRequested =
+    userParts.length > 1 || (userParts.length === 1 && !knownCountries.has(userParts[0]));
+
+  const requestedCity = hasSpecificCityRequested ? userParts[0] : null;
+  const requestedCountry =
+    userParts.length > 1
+      ? userParts[1]
+      : !hasSpecificCityRequested
+      ? userParts[0]
+      : (jobCountry ? normalizeText(jobCountry) : null);
+
+  // Check city match
+  const cityMatched = requestedCity ? normJobLoc.includes(requestedCity) : false;
+
+  // Check country match
+  const normJobCountry = jobCountry ? normalizeText(jobCountry) : '';
+  const countryMatched =
+    (requestedCountry && normJobCountry === requestedCountry) ||
+    (requestedCountry ? normJobLoc.includes(requestedCountry) : false);
+
+  // Case A: User specified a city (e.g. "Bengaluru" or "Bengaluru, India")
+  if (requestedCity) {
+    if (cityMatched) {
+      return {
+        score: 20,
+        reason: `Location matches requested city: "${displayLoc}"`,
+        isMismatch: false,
+      };
+    }
+
+    // Job is remote
+    if (isJobRemote) {
+      if (countryMatched || !jobCountry || jobCountry === 'Remote' || jobCountry === 'Worldwide') {
+        return {
+          score: 18,
+          reason: 'Role is remote and compatible with your location',
+          isMismatch: false,
+        };
+      }
+    }
+
+    // If country matches, but city does not match or is country-wide
+    if (countryMatched) {
+      const jobParts = (jobLocation || '')
+        .split(',')
+        .map((p) => normalizeText(p))
+        .filter(Boolean);
+      const isJobCountryWide =
+        jobParts.length === 1 &&
+        (jobParts[0] === requestedCountry || (requestedCountry && jobParts[0].includes(requestedCountry)));
+
+      if (isJobCountryWide) {
+        return {
+          score: 18,
+          reason: `Location matches requested country (${jobCountry || requestedCountry}), but specific city was requested`,
+          isMismatch: false,
+        };
+      }
+
+      // Different city in the same country -> Incompatible with specific city request
+      return {
+        score: 0,
+        warning: `Location "${displayLoc}" does not match requested city "${userLocation}"`,
+        isMismatch: true,
+      };
+    }
+
+    // Neither city nor country matched
+    return {
+      score: 0,
+      warning: `Location "${displayLoc}" does not match requested "${userLocation}"`,
+      isMismatch: true,
+    };
+  }
+
+  // Case B: User specified a country (e.g. "India")
+  if (requestedCountry) {
+    if (countryMatched || normJobLoc.includes(requestedCountry)) {
+      return {
+        score: 20,
+        reason: `Location matches requested country: ${jobCountry || displayLoc}`,
+        isMismatch: false,
+      };
+    }
+
+    if (isJobRemote) {
+      return {
+        score: 18,
+        reason: 'Role is remote and compatible with your location',
+        isMismatch: false,
+      };
+    }
+
+    // Geographic mismatch
+    return {
+      score: 0,
+      warning: `Location "${displayLoc}" does not match requested "${userLocation}"`,
+      isMismatch: true,
+    };
+  }
+
+  // Fallback: direct substring match
+  if (normJobLoc.includes(normUserLoc) || normUserLoc.includes(normJobLoc)) {
     return {
       score: 20,
-      reason: locExplanation,
+      reason: `Location matches "${displayLoc}"`,
       isMismatch: false,
     };
   }
 
-  // Geographic mismatch
+  if (isJobRemote) {
+    return {
+      score: 18,
+      reason: 'Role is remote and compatible with your location',
+      isMismatch: false,
+    };
+  }
+
   return {
     score: 0,
     warning: `Location "${displayLoc}" does not match requested "${userLocation}"`,
@@ -148,13 +342,20 @@ export function scoreLocation(
 
 /**
  * 3. Keyword Match (Max 20 Points)
+ * Evidence-based search across title, description, requirements, and keywords.
+ * Neutral when no user keywords are specified.
  */
 export function scoreKeywords(
   job: JobListing,
   userKeywords?: string[]
-): { score: number; reason?: string; warning?: string } {
+): { score: number; reason?: string; warning?: string; isNeutral: boolean } {
   if (!userKeywords || userKeywords.length === 0) {
-    return { score: 20, reason: 'No specific keywords required' };
+    return { score: 0, isNeutral: true };
+  }
+
+  const validKeywords = userKeywords.map((k) => k.trim()).filter((k) => k.length > 0);
+  if (validKeywords.length === 0) {
+    return { score: 0, isNeutral: true };
   }
 
   const combinedJobText = `
@@ -167,10 +368,7 @@ export function scoreKeywords(
   const matchedKeywords: string[] = [];
   const missingKeywords: string[] = [];
 
-  for (const rawKw of userKeywords) {
-    const kw = rawKw.trim();
-    if (!kw) continue;
-
+  for (const kw of validKeywords) {
     const lowerKw = kw.toLowerCase();
     let isMatched = false;
 
@@ -194,12 +392,7 @@ export function scoreKeywords(
     }
   }
 
-  const validCount = matchedKeywords.length + missingKeywords.length;
-  if (validCount === 0) {
-    return { score: 20, reason: 'No valid keywords specified' };
-  }
-
-  const ratio = matchedKeywords.length / validCount;
+  const ratio = matchedKeywords.length / validKeywords.length;
   const score = Math.round(ratio * 20);
 
   let reason: string | undefined;
@@ -212,25 +405,27 @@ export function scoreKeywords(
     warning = `Keywords not found: ${missingKeywords.join(', ')}`;
   }
 
-  return { score, reason, warning };
+  return { score, reason, warning, isNeutral: false };
 }
 
 /**
  * 4. Seniority Match (Max 10 Points)
+ * Neutral when user prefers 'Any' or unspecified.
  */
 export function scoreSeniority(
   jobSeniority: SeniorityLevel | null,
   preferredSeniority?: SeniorityLevel | 'Any' | null,
   requirements?: string[]
-): { score: number; reason?: string; warning?: string } {
+): { score: number; reason?: string; warning?: string; isNeutral: boolean } {
   if (!preferredSeniority || preferredSeniority === 'Any') {
-    return { score: 10, reason: 'Seniority preference open / any' };
+    return { score: 0, isNeutral: true };
   }
 
   if (jobSeniority === preferredSeniority) {
     return {
       score: 10,
       reason: `Seniority aligns with requested ${preferredSeniority}`,
+      isNeutral: false,
     };
   }
 
@@ -239,7 +434,7 @@ export function scoreSeniority(
   const expMatch = reqText.match(/(\d+[\s–-]+(?:\d+)?\s*(?:\+)?\s*years?)/i);
   const expSnippet = expMatch ? expMatch[0] : null;
 
-  // Junior requesting Senior
+  // Junior requesting Senior/Lead/Executive/Director
   if (
     (preferredSeniority === 'Intern' || preferredSeniority === 'Junior') &&
     (jobSeniority === 'Senior' || jobSeniority === 'Lead' || jobSeniority === 'Executive' || jobSeniority === 'Director')
@@ -249,17 +444,19 @@ export function scoreSeniority(
       warning: expSnippet
         ? `Job requests ${expSnippet} of experience (${jobSeniority})`
         : `Job requests ${jobSeniority} level experience`,
+      isNeutral: false,
     };
   }
 
-  // Senior requesting Junior
+  // Senior requesting Junior/Intern
   if (
     (preferredSeniority === 'Senior' || preferredSeniority === 'Lead') &&
     (jobSeniority === 'Intern' || jobSeniority === 'Junior')
   ) {
     return {
-      score: 5,
+      score: 4,
       warning: `Job is entry-level (${jobSeniority}), but ${preferredSeniority} was requested`,
+      isNeutral: false,
     };
   }
 
@@ -267,6 +464,7 @@ export function scoreSeniority(
     return {
       score: 6,
       warning: 'Seniority level not specified in posting',
+      isNeutral: false,
     };
   }
 
@@ -274,24 +472,27 @@ export function scoreSeniority(
   return {
     score: 8,
     reason: `Seniority is reasonably close (${jobSeniority})`,
+    isNeutral: false,
   };
 }
 
 /**
  * 5. Work Mode Match (Max 10 Points)
+ * Neutral when user prefers 'Any' or unspecified.
  */
 export function scoreWorkMode(
   jobWorkMode: WorkMode | null,
   preferredWorkMode?: WorkMode | 'Any' | null
-): { score: number; reason?: string; warning?: string } {
+): { score: number; reason?: string; warning?: string; isNeutral: boolean } {
   if (!preferredWorkMode || preferredWorkMode === 'Any') {
-    return { score: 10, reason: 'Work mode preference flexible' };
+    return { score: 0, isNeutral: true };
   }
 
   if (jobWorkMode === preferredWorkMode) {
     return {
       score: 10,
       reason: `Work mode matches preferred policy (${preferredWorkMode})`,
+      isNeutral: false,
     };
   }
 
@@ -299,6 +500,7 @@ export function scoreWorkMode(
     return {
       score: 5,
       warning: 'Work mode not specified in listing',
+      isNeutral: false,
     };
   }
 
@@ -307,35 +509,73 @@ export function scoreWorkMode(
       return {
         score: 5,
         warning: 'Role is Hybrid, but Remote was preferred',
+        isNeutral: false,
       };
     }
     if (jobWorkMode === 'On-site') {
       return {
         score: 2,
         warning: 'Role is On-site, but Remote was preferred',
+        isNeutral: false,
+      };
+    }
+  }
+
+  if (preferredWorkMode === 'Hybrid') {
+    if (jobWorkMode === 'Remote') {
+      return {
+        score: 7,
+        reason: 'Role is Remote, flexible with Hybrid preference',
+        isNeutral: false,
+      };
+    }
+    if (jobWorkMode === 'On-site') {
+      return {
+        score: 4,
+        warning: 'Role is On-site, but Hybrid was preferred',
+        isNeutral: false,
+      };
+    }
+  }
+
+  if (preferredWorkMode === 'On-site') {
+    if (jobWorkMode === 'Hybrid') {
+      return {
+        score: 6,
+        reason: 'Role is Hybrid, includes on-site office presence',
+        isNeutral: false,
+      };
+    }
+    if (jobWorkMode === 'Remote') {
+      return {
+        score: 3,
+        warning: 'Role is Remote, but On-site was preferred',
+        isNeutral: false,
       };
     }
   }
 
   return {
-    score: 6,
+    score: 5,
     warning: `Work mode is ${jobWorkMode}, but ${preferredWorkMode} was requested`,
+    isNeutral: false,
   };
 }
 
 /**
  * 6. Visa Sponsorship Match (Max 5 Points)
+ * Neutral when user prefers 'Any', 'No sponsorship required', or unspecified.
  */
 export function scoreVisa(
   jobDescription: string,
   visaPreference?: VisaPreference
-): { score: number; reason?: string; warning?: string } {
+): { score: number; reason?: string; warning?: string; isNeutral: boolean } {
   if (
     !visaPreference ||
     visaPreference === 'Any' ||
     visaPreference === 'No sponsorship required'
   ) {
-    return { score: 5, reason: 'Visa requirements met' };
+    return { score: 0, isNeutral: true };
   }
 
   // User specifically requires sponsorship
@@ -349,6 +589,7 @@ export function scoreVisa(
     return {
       score: 5,
       reason: 'Visa sponsorship explicitly available',
+      isNeutral: false,
     };
   }
 
@@ -360,17 +601,20 @@ export function scoreVisa(
     return {
       score: 0,
       warning: 'Visa sponsorship not supported for this role',
+      isNeutral: false,
     };
   }
 
   return {
     score: 2,
     warning: 'Visa sponsorship not specified in listing',
+    isNeutral: false,
   };
 }
 
 /**
  * 7. Freshness Match (Max 5 Points)
+ * Small recency contribution based on verification timestamp.
  */
 export function scoreFreshness(checkedAt: string): { score: number; reason?: string } {
   if (!checkedAt) {
@@ -379,6 +623,10 @@ export function scoreFreshness(checkedAt: string): { score: number; reason?: str
 
   try {
     const checkedTime = new Date(checkedAt).getTime();
+    if (isNaN(checkedTime)) {
+      return { score: 1, reason: 'Verification timestamp invalid' };
+    }
+
     const now = Date.now();
     const diffHours = Math.max(0, (now - checkedTime) / (1000 * 60 * 60));
 
@@ -412,7 +660,8 @@ function isJobExpiredOrClosed(description: string, title: string): boolean {
 
 /**
  * Main Pure Matching Function: Compares a JobListing against UserPreferences
- * and returns a deterministic, fully explainable 100-point match breakdown.
+ * and returns a deterministic, fully explainable 0-100 normalized match result.
+ * Unspecified preferences are treated as neutral and excluded from the denominator.
  */
 export function scoreJobMatch(
   job: JobListing,
@@ -439,50 +688,75 @@ export function scoreJobMatch(
   const reasons: string[] = [];
   const warnings: string[] = [];
 
-  // 1. Role Score (30 pts)
-  const roleRes = scoreRole(job.title, preferences.role);
+  let applicableMax = 0;
+  let totalEarned = 0;
+
+  // 1. Role Score (Max 30) - Always applicable
+  applicableMax += 30;
+  const roleRes = scoreRole(job.title, preferences?.role || '');
+  totalEarned += roleRes.score;
   if (roleRes.reason) reasons.push(roleRes.reason);
   if (roleRes.warning) warnings.push(roleRes.warning);
 
-  // 2. Location Score (20 pts)
+  // 2. Location Score (Max 20) - Always applicable
+  applicableMax += 20;
   const locRes = scoreLocation(
     job.location,
     job.country,
     job.workMode,
-    preferences.location
+    preferences?.location || ''
   );
+  totalEarned += locRes.score;
   if (locRes.reason) reasons.push(locRes.reason);
   if (locRes.warning) warnings.push(locRes.warning);
 
-  // 3. Keywords Score (20 pts)
-  const kwRes = scoreKeywords(job, preferences.keywords);
-  if (kwRes.reason) reasons.push(kwRes.reason);
-  if (kwRes.warning) warnings.push(kwRes.warning);
+  // 3. Keywords Score (Max 20 if specified)
+  const kwRes = scoreKeywords(job, preferences?.keywords);
+  if (!kwRes.isNeutral) {
+    applicableMax += 20;
+    totalEarned += kwRes.score;
+    if (kwRes.reason) reasons.push(kwRes.reason);
+    if (kwRes.warning) warnings.push(kwRes.warning);
+  }
 
-  // 4. Seniority Score (10 pts)
+  // 4. Seniority Score (Max 10 if specified)
   const senRes = scoreSeniority(
     job.seniority,
-    preferences.seniority,
+    preferences?.seniority,
     job.requirements
   );
-  if (senRes.reason) reasons.push(senRes.reason);
-  if (senRes.warning) warnings.push(senRes.warning);
+  if (!senRes.isNeutral) {
+    applicableMax += 10;
+    totalEarned += senRes.score;
+    if (senRes.reason) reasons.push(senRes.reason);
+    if (senRes.warning) warnings.push(senRes.warning);
+  }
 
-  // 5. Work Mode Score (10 pts)
-  const wmRes = scoreWorkMode(job.workMode, preferences.workMode);
-  if (wmRes.reason) reasons.push(wmRes.reason);
-  if (wmRes.warning) warnings.push(wmRes.warning);
+  // 5. Work Mode Score (Max 10 if specified)
+  const wmRes = scoreWorkMode(job.workMode, preferences?.workMode);
+  if (!wmRes.isNeutral) {
+    applicableMax += 10;
+    totalEarned += wmRes.score;
+    if (wmRes.reason) reasons.push(wmRes.reason);
+    if (wmRes.warning) warnings.push(wmRes.warning);
+  }
 
-  // 6. Visa Score (5 pts)
+  // 6. Visa Score (Max 5 if specified)
   const visaRes = scoreVisa(
     `${job.title} ${job.description} ${job.requirements.join(' ')}`,
-    preferences.visaPreference
+    preferences?.visaPreference
   );
-  if (visaRes.reason) reasons.push(visaRes.reason);
-  if (visaRes.warning) warnings.push(visaRes.warning);
+  if (!visaRes.isNeutral) {
+    applicableMax += 5;
+    totalEarned += visaRes.score;
+    if (visaRes.reason) reasons.push(visaRes.reason);
+    if (visaRes.warning) warnings.push(visaRes.warning);
+  }
 
-  // 7. Freshness Score (5 pts)
+  // 7. Freshness Score (Max 5) - Always applicable
+  applicableMax += 5;
   const freshRes = scoreFreshness(job.checkedAt);
+  totalEarned += freshRes.score;
   if (freshRes.reason) reasons.push(freshRes.reason);
 
   const breakdown: MatchBreakdown = {
@@ -495,41 +769,30 @@ export function scoreJobMatch(
     freshness: freshRes.score,
   };
 
-  const totalScore = Math.min(
+  const safeDenominator = Math.max(1, applicableMax);
+  const normalizedScore = Math.min(
     100,
-    Math.max(
-      0,
-      breakdown.role +
-        breakdown.location +
-        breakdown.keywords +
-        breakdown.seniority +
-        breakdown.workMode +
-        breakdown.visa +
-        breakdown.freshness
-    )
+    Math.max(0, Math.round((totalEarned / safeDenominator) * 100))
   );
 
   // Hard Filter Evaluations:
   let eligible = true;
 
-  // Filter 1: Clearly incompatible role (0 role match)
   if (roleRes.isMismatch) {
     eligible = false;
   }
 
-  // Filter 2: Clearly incompatible location
   if (locRes.isMismatch) {
     eligible = false;
   }
 
-  // Filter 3: Clearly closed or expired posting
   if (isJobExpiredOrClosed(job.description, job.title)) {
     eligible = false;
     warnings.unshift('Job posting is closed or no longer accepting applications');
   }
 
   return {
-    score: totalScore,
+    score: normalizedScore,
     eligible,
     reasons,
     warnings,

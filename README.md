@@ -207,36 +207,47 @@ roleradar/
 
 RoleRadar strictly rejects "black-box LLM percentages". Instead, every match score (0–100) is calculated deterministically across explicit, traceable dimensions with human-readable evidence.
 
-### 100-Point Deterministic Model
+### Neutral Dimensions & Dynamic Denominator Normalization
 
-| Dimension | Points | Description & Criteria |
-|---|:---:|---|
-| **Role Match** | 30 | Normalized token overlap against job title. Exact matches receive 30 pts; subset alignments (e.g. "Product Manager" in "Product Manager, Growth") receive 28 pts; related roles receive 20 pts. |
-| **Location Match** | 20 | Geographic matching of city and country. Explicit Remote roles receive full points for region-compatible candidates. Neutral points (8 pts) if location is undisclosed. |
-| **Keywords Match** | 20 | Proportional scoring of requested skills and domain tags against title, description, and requirements. Zero requested keywords awards full neutral points. |
-| **Seniority Match** | 10 | Compares preferred level (Intern, Junior, Mid, Senior, Lead, Executive) against detected job requirements and experience years. |
-| **Work Mode Match** | 10 | Matches Remote, Hybrid, and On-site policies. Incompatible policies receive reduced points and explanatory warnings. |
-| **Visa Sponsorship** | 5 | Awards 5 pts for confirmed sponsorship or when not required; 2 pts (neutral) with warning when unspecified; 0 pts if explicitly restricted. |
-| **Freshness** | 5 | Verification recency: verified within 1h (5 pts), 24h (4 pts), 3 days (3 pts), 7 days (2 pts), or older (1 pt). |
+Unspecified preferences are neutral and do not contribute points. The final percentage is normalized across the preferences the user actually specified, preventing broad searches with many 'Any' fields from producing artificially inflated scores.
+
+- **Neutral Dimensions**: When a preference is unspecified (e.g. `Seniority: Any`, `Work Mode: Any`, `Visa: Any`, or empty keywords), its earned points are `0`, no noisy warnings are generated, and its maximum points are excluded from the denominator.
+- **Normalization Formula**:
+  $$\text{Score} = \min\left(100, \max\left(0, \text{round}\left(\frac{\sum \text{Earned Points on Applicable Dimensions}}{\sum \text{Maximum Points of Applicable Dimensions}} \times 100\right)\right)\right)$$
+  For example, with `Role: PM`, `Location: India`, `Keywords: AI`, and all other preferences set to `Any`, the applicable maximum is $30 + 20 + 20 + 5 = 75$. If a job earns $30 + 20 + 15 + 5 = 70$, its displayed normalized score is $\text{round}(70 / 75 \times 100) = 93\%$.
+
+### Deterministic Dimension Weights & Differentiation
+
+| Dimension | Max Points | Applicability | Description & Criteria |
+|---|:---:|:---:|---|
+| **Role Match** | 30 | Always | Normalized token and phrase alignment. Exact title phrase: **30 pts**; exact role with specialization (e.g. "Product Manager, Growth"): **27 pts**; seniority variant (e.g. "Senior Product Manager"): **24 pts**; related role ("Product Owner"): **18 pts**; adjacent discipline ("Product Analyst"): **12 pts**; unrelated: **0 pts & ineligible**. |
+| **Location Match** | 20 | Always | Matches requested city or country. Requested city match: **20 pts**; country match when city requested: **18 pts**; country-level match: **20 pts**; remote compatible: **18 pts**; undisclosed: **6 pts**; mismatch: **0 pts & ineligible**. |
+| **Keywords Match** | 20 | User specified | Evidence-based word-boundary matching across title, description, and requirements. Neutral (0 pts, excluded from denominator) if user provides no keywords. |
+| **Seniority Match** | 10 | Real level specified | Matches requested seniority level (10 pts), adjacent levels (8 pts), or unknown (6 pts). Penalizes gaps with explanatory warnings. Neutral (0 pts, excluded from denominator) when set to "Any". |
+| **Work Mode Match** | 10 | Policy specified | Matches Remote, Hybrid, and On-site policies. Incompatible policies receive reduced points and explanatory warnings. Neutral (0 pts, excluded from denominator) when set to "Any". |
+| **Visa Sponsorship** | 5 | Sponsorship required | Confirmed sponsorship: **5 pts**; unspecified/unknown: **2 pts** with warning; explicitly unavailable: **0 pts**. Neutral (0 pts, excluded from denominator) when set to "Any" or "No sponsorship required". |
+| **Freshness** | 5 | Always | Recency of live verification: verified within 1h (**5 pts**), 24h (**4 pts**), 3 days (**3 pts**), 7 days (**2 pts**), or older (**1 pt**). |
 
 ### Hard Filters (`eligible: false`)
 A job is flagged as ineligible if any of the following critical mismatches occur:
-1. **Unrelated Role**: Role token overlap is below 0.3 (e.g. *Software Engineer* when *Product Manager* was requested).
-2. **Explicit Location Incompatibility**: The position is strictly on-site/in-office in an incompatible geographic region (e.g. *London, UK* when *India* was requested).
+1. **Unrelated Role**: Role token overlap is 0 (e.g. *Software Engineer* when *Product Manager* was requested).
+2. **Explicit Location Incompatibility**: The position is strictly in an incompatible geographic region (e.g. *London, UK* when *India* was requested).
 3. **Closed or Expired Postings**: The page content contains closed indicators (e.g. *"no longer accepting applications"*, *"job has expired"*).
 
 *Note: Seniority gaps, missing keywords, and unspecified visa policies affect the score and trigger warnings, but do not make a job ineligible.*
 
-### Unknown Data Handling
-- **Missing Location**: Scored neutrally (8/20) with warning *"Location not specified in posting"*.
-- **Missing Work Mode**: Scored neutrally (5/10) with warning *"Work mode not specified in listing"*.
-- **Missing Visa Policy**: Scored neutrally (2/5) with warning *"Visa sponsorship not specified in listing"*.
-- **Empty Keywords**: Scored neutrally (20/20) with reason *"No specific keywords required"*.
+### Deterministic Sorting Order
+1. **Match Score** descending
+2. **Role Score** descending
+3. **Keyword Evidence** descending
+4. **Freshness Score** descending
+5. **Alphabetical Tie-Breaker** (title + company ascending)
 
 ### Explainable Evidence Tags
 - `✓ Exact role match for "Product Manager"`
-- `✓ Location matches "Bengaluru, India"`
+- `✓ Location matches requested city: "Bengaluru, India"`
 - `✓ Keywords matched: AI, SaaS`
+- `⚠ Keywords not found: Kubernetes`
 - `⚠ Job requests 3–7 years of experience (Senior)`
 - `⚠ Visa sponsorship not specified in listing`
 
