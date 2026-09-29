@@ -176,30 +176,42 @@ roleradar/
 
 ---
 
-## 7. Matching Logic
+## 7. Matching and Ranking
 
-RoleRadar avoids "black-box LLM percentages". Instead, every match score (0–100%) is generated deterministically across multiple transparent dimensions:
+RoleRadar strictly rejects "black-box LLM percentages". Instead, every match score (0–100) is calculated deterministically across explicit, traceable dimensions with human-readable evidence.
 
-| Dimension | Weight | Criteria |
-|---|---|---|
-| **Role Fit** | 30% | Title and department similarity against user desired role |
-| **Location & Work Mode** | 25% | Geo-match, remote vs hybrid vs on-site alignment |
-| **Keywords & Skills** | 20% | Mentions of desired frameworks, tech stacks, or domains |
-| **Seniority Match** | 15% | Years of experience and level (Intern, Junior, Mid, Senior, Lead) |
-| **Visa & Sponsorship** | 10% | Detection of visa support or explicit restrictions |
+### 100-Point Deterministic Model
 
-### Hard Filters
-- Explicitly incompatible location (e.g., in-office in Tokyo when user requested Berlin).
-- Closed or archived postings detected during Fetch.
-- Unrelated job categories.
+| Dimension | Points | Description & Criteria |
+|---|:---:|---|
+| **Role Match** | 30 | Normalized token overlap against job title. Exact matches receive 30 pts; subset alignments (e.g. "Product Manager" in "Product Manager, Growth") receive 28 pts; related roles receive 20 pts. |
+| **Location Match** | 20 | Geographic matching of city and country. Explicit Remote roles receive full points for region-compatible candidates. Neutral points (8 pts) if location is undisclosed. |
+| **Keywords Match** | 20 | Proportional scoring of requested skills and domain tags against title, description, and requirements. Zero requested keywords awards full neutral points. |
+| **Seniority Match** | 10 | Compares preferred level (Intern, Junior, Mid, Senior, Lead, Executive) against detected job requirements and experience years. |
+| **Work Mode Match** | 10 | Matches Remote, Hybrid, and On-site policies. Incompatible policies receive reduced points and explanatory warnings. |
+| **Visa Sponsorship** | 5 | Awards 5 pts for confirmed sponsorship or when not required; 2 pts (neutral) with warning when unspecified; 0 pts if explicitly restricted. |
+| **Freshness** | 5 | Verification recency: verified within 1h (5 pts), 24h (4 pts), 3 days (3 pts), 7 days (2 pts), or older (1 pt). |
 
-### Explainable Badges
-Every job card displays explicit evidence tags:
-- `✓ Direct Role Match: Senior Frontend Engineer`
-- `✓ Remote work supported`
-- `✓ Matches keywords: TypeScript, Next.js`
-- `⚠ Visa sponsorship not specified`
-- `⚠ Requires 5+ years experience`
+### Hard Filters (`eligible: false`)
+A job is flagged as ineligible if any of the following critical mismatches occur:
+1. **Unrelated Role**: Role token overlap is below 0.3 (e.g. *Software Engineer* when *Product Manager* was requested).
+2. **Explicit Location Incompatibility**: The position is strictly on-site/in-office in an incompatible geographic region (e.g. *London, UK* when *India* was requested).
+3. **Closed or Expired Postings**: The page content contains closed indicators (e.g. *"no longer accepting applications"*, *"job has expired"*).
+
+*Note: Seniority gaps, missing keywords, and unspecified visa policies affect the score and trigger warnings, but do not make a job ineligible.*
+
+### Unknown Data Handling
+- **Missing Location**: Scored neutrally (8/20) with warning *"Location not specified in posting"*.
+- **Missing Work Mode**: Scored neutrally (5/10) with warning *"Work mode not specified in listing"*.
+- **Missing Visa Policy**: Scored neutrally (2/5) with warning *"Visa sponsorship not specified in listing"*.
+- **Empty Keywords**: Scored neutrally (20/20) with reason *"No specific keywords required"*.
+
+### Explainable Evidence Tags
+- `✓ Exact role match for "Product Manager"`
+- `✓ Location matches "Bengaluru, India"`
+- `✓ Keywords matched: AI, SaaS`
+- `⚠ Job requests 3–7 years of experience (Senior)`
+- `⚠ Visa sponsorship not specified in listing`
 
 ---
 
