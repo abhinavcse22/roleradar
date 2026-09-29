@@ -36,7 +36,8 @@ export function generateSearchQueries(preferences: UserPreferences): string[] {
     `"${role}" "${location}"${kwToken} site:jobs.ashbyhq.com`,
     `"${role}" "${location}"${kwToken} site:boards.greenhouse.io`,
     `"${role}" "${location}"${kwToken} site:jobs.lever.co`,
-    `"${role}" "${location}"${kwToken} careers`,
+    `"${role}" "${location}"${kwToken} ("join our team" OR "work with us" OR "careers")`,
+    `"${role}" "${location}"${kwToken} inurl:careers "openings"`,
   ];
 
   // Return unique queries
@@ -195,23 +196,23 @@ export async function searchJobs(
   // -------------------------------------------------------------
   // 4. TinyFish Agent Phase (Dynamic Career Hubs)
   // -------------------------------------------------------------
-  // Run Agent selectively on top 1-2 discovered career hubs with safe timeout
+  // Run Agent selectively on top discovered career hub with bounded timeout
   const careerHubsForAgent = careerHubCandidates
     .map((item) => item.url)
     .filter((url) => !handledUrls.has(canonicalizeUrl(url)))
-    .slice(0, 2);
+    .slice(0, 1);
 
   if (careerHubsForAgent.length > 0) {
     const agentSettled = await runWithConcurrency(
       careerHubsForAgent,
-      2, // Concurrency limit of 2 for Agent
+      1, // Single agent execution to ensure bounded resource usage
       async (url) => {
         return await runTinyFishAgent({
           url,
           role: preferences.role,
           location: preferences.location,
           keywords: preferences.keywords || [],
-          timeoutMs: 20000, // 20s bounded timeout per Agent run
+          timeoutMs: 65000, // 65s bounded timeout to allow deep browser automation
         });
       }
     );

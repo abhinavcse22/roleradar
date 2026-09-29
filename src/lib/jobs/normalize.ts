@@ -85,6 +85,118 @@ export function normalizeText(text: string): string {
     .trim();
 }
 
+export const GENERIC_COMPANY_BLOCKLIST = new Set([
+  'jobs',
+  'careers',
+  'job',
+  'apply',
+  'boards',
+  'join',
+  'positions',
+  'openings',
+  'work',
+  'workday',
+  'myworkdayjobs',
+  'employment',
+  'unknown',
+  'unknown company',
+  'lever',
+  'ashby',
+  'greenhouse',
+  'ats',
+  'hiring',
+  'example',
+  'sample',
+  'test',
+  'localhost',
+  'domain',
+]);
+
+/**
+ * Formats a slugified or hyphenated company name into title case (e.g. "go-high-level" -> "Go High Level").
+ */
+export function formatCompanyName(slug: string): string {
+  if (!slug) return '';
+  return slug
+    .split(/[-_]/)
+    .filter(Boolean)
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ');
+}
+
+/**
+ * Deterministically extracts the company name from known ATS and career portal URL patterns:
+ * - jobs.ashbyhq.com/<company>/...
+ * - boards.greenhouse.io/<company>/...
+ * - jobs.lever.co/<company>/...
+ * - careers.<company>.com
+ * - <company>.com/careers
+ */
+export function extractCompanyFromUrl(rawUrl: string): string | null {
+  if (!rawUrl) return null;
+  try {
+    const parsed = new URL(rawUrl);
+    const host = parsed.hostname.toLowerCase().replace(/^www\./, '');
+    const pathname = parsed.pathname.replace(/\/+$/, '');
+    const segments = pathname.split('/').filter(Boolean);
+
+    // 1. Ashby ATS: jobs.ashbyhq.com/<company>/...
+    if (host.includes('jobs.ashbyhq.com') && segments.length >= 1) {
+      const candidate = segments[0].toLowerCase();
+      if (!GENERIC_COMPANY_BLOCKLIST.has(candidate)) {
+        return formatCompanyName(candidate);
+      }
+    }
+
+    // 2. Greenhouse ATS: boards.greenhouse.io/<company>/... or boards.greenhouse.io/embed/job_app?for=<company>
+    if (host.includes('boards.greenhouse.io')) {
+      const forParam = parsed.searchParams.get('for')?.toLowerCase();
+      if (forParam && !GENERIC_COMPANY_BLOCKLIST.has(forParam)) {
+        return formatCompanyName(forParam);
+      }
+      if (segments.length >= 1) {
+        const seg = segments[0] === 'embed' && segments.length >= 2 ? segments[1] : segments[0];
+        const candidate = seg.toLowerCase();
+        if (!GENERIC_COMPANY_BLOCKLIST.has(candidate)) {
+          return formatCompanyName(candidate);
+        }
+      }
+    }
+
+    // 3. Lever ATS: jobs.lever.co/<company>/...
+    if (host.includes('jobs.lever.co') && segments.length >= 1) {
+      const candidate = segments[0].toLowerCase();
+      if (!GENERIC_COMPANY_BLOCKLIST.has(candidate)) {
+        return formatCompanyName(candidate);
+      }
+    }
+
+    // 4. Subdomains: careers.<company>.com, jobs.<company>.com
+    const hostParts = host.split('.');
+    if (hostParts.length >= 3 && (hostParts[0] === 'careers' || hostParts[0] === 'jobs')) {
+      const candidate = hostParts[1].toLowerCase();
+      if (!GENERIC_COMPANY_BLOCKLIST.has(candidate)) {
+        return formatCompanyName(candidate);
+      }
+    }
+
+    // 5. Main company domain with explicit careers path (e.g. sarvam.ai/careers/...)
+    const hasCareersPath = /^\/(careers|jobs|join-us|work-with-us)\b/i.test(pathname);
+    if (hasCareersPath) {
+      if (hostParts.length === 2) {
+        const candidate = hostParts[0].toLowerCase();
+        if (!GENERIC_COMPANY_BLOCKLIST.has(candidate)) {
+          return formatCompanyName(candidate);
+        }
+      }
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Normalizes company name for fingerprint comparison by stripping corporate designations.
  */
@@ -101,22 +213,122 @@ export function normalizeCompanyForComparison(company: string): string {
 }
 
 /**
- * Formats a clean display company name.
+ * Formats a clean display company name with robust fallback hierarchy.
+ * Guarantees that generic names like "Jobs", "Careers", "Boards" are rejected.
  */
-export function cleanDisplayCompany(company: string, fallbackDomain?: string): string {
-  const trimmed = company.trim();
-  if (trimmed) {
-    return trimmed.replace(/\s+(inc|llc|pvt ltd|private limited)\.?$/i, '').trim();
+export function cleanDisplayCompany(
+  company: string,
+  fallbackDomain?: string,
+  fallbackUrl?: string
+): string {
+  const trimmed = (company || '').trim();
+  const lower = trimmed.toLowerCase();
+
+  // If explicit non-generic company name is provided
+  if (trimmed && !GENERIC_COMPANY_BLOCKLIST.has(lower)) {
+    const cleaned = trimmed.replace(/\s+(inc|llc|pvt ltd|private limited)\.?$/i, '').trim();
+    if (cleaned && !GENERIC_COMPANY_BLOCKLIST.has(cleaned.toLowerCase())) {
+      return cleaned;
+    }
   }
 
+  // Fallback 1: Extract company deterministically from URL
+  if (fallbackUrl) {
+    const fromUrl = extractCompanyFromUrl(fallbackUrl);
+    if (fromUrl && !GENERIC_COMPANY_BLOCKLIST.has(fromUrl.toLowerCase())) {
+      return fromUrl;
+    }
+  }
+
+  // Fallback 2: Domain parsing (excluding generic parts)
   if (fallbackDomain) {
     const parts = fallbackDomain.replace(/^www\./, '').split('.');
-    if (parts.length > 0 && parts[0]) {
-      return parts[0].charAt(0).toUpperCase() + parts[0].slice(1);
+    for (const part of parts) {
+      const pLower = part.toLowerCase();
+      if (pLower.length > 2 && !GENERIC_COMPANY_BLOCKLIST.has(pLower) && pLower !== 'com' && pLower !== 'org' && pLower !== 'net' && pLower !== 'io' && pLower !== 'ai') {
+        return part.charAt(0).toUpperCase() + part.slice(1).toLowerCase();
+      }
     }
   }
 
   return 'Unknown Company';
+}
+
+const ROLE_KEYWORDS_REGEX =
+  /\b(pm|swe|sde|qa|engineer|engineering|developer|manager|lead|designer|analyst|intern|internship|director|vp|vice president|specialist|associate|consultant|architect|scientist|head of|officer|coordinator|administrator)\b/i;
+
+const LOCATION_OR_WORKMODE_REGEX =
+  /^(remote|hybrid|on-site|onsite|india|usa|us|uk|united states|united kingdom|bengaluru|bangalore|san francisco|sf|new york|nyc|london|singapore|berlin|toronto|canada|europe|emea|apac|latam)$/i;
+
+/**
+ * Parses raw title to extract company if embedded (e.g. "Product Manager @ Weave", "HighLevel - Staff PM", "PM - Sarvam").
+ */
+export function extractCompanyAndTitle(rawTitle: string): { title: string; company?: string } {
+  if (!rawTitle) return { title: 'Untitled Role' };
+
+  let title = rawTitle.trim();
+  let company: string | undefined;
+
+  // Pattern 1: "Role @ Company" (e.g. "Product Manager @ Weave")
+  const atSignMatch = title.match(/^(.*?)\s+@\s+([^|\-–]+)/i);
+  if (atSignMatch) {
+    title = atSignMatch[1].trim();
+    const candidateComp = atSignMatch[2].trim();
+    if (!GENERIC_COMPANY_BLOCKLIST.has(candidateComp.toLowerCase())) {
+      company = candidateComp;
+    }
+  }
+
+  // Pattern 2: "Role at Company" (e.g. "Product Manager at Sarvam AI")
+  if (!company) {
+    const atWordMatch = title.match(/^(.*?)\s+at\s+([^|\-–]+)/i);
+    if (atWordMatch) {
+      title = atWordMatch[1].trim();
+      const candidateComp = atWordMatch[2].trim();
+      if (!GENERIC_COMPANY_BLOCKLIST.has(candidateComp.toLowerCase())) {
+        company = candidateComp;
+      }
+    }
+  }
+
+  // Pattern 3: Separators " - ", " – ", " — "
+  if (!company) {
+    const dashMatch = title.match(/^([^-–—]+)\s*[-–—]\s*(.+)$/);
+    if (dashMatch) {
+      const part1 = dashMatch[1].trim();
+      const part2 = dashMatch[2].trim();
+
+      const part1IsRole = ROLE_KEYWORDS_REGEX.test(part1);
+      const part2IsRole = ROLE_KEYWORDS_REGEX.test(part2);
+
+      // Subcase 3a: Part 1 is Role, Part 2 is Company / "Company Careers" (e.g. "PM - Sarvam", "Product Manager - Sarvam AI Careers")
+      if (part1IsRole && !part2IsRole) {
+        title = part1;
+        const cleanedComp = part2.replace(/\s*[-–—|]?\s*\b(careers|jobs|job board|openings|recruitment)\b.*$/i, '').trim();
+        if (
+          cleanedComp &&
+          !GENERIC_COMPANY_BLOCKLIST.has(cleanedComp.toLowerCase()) &&
+          !LOCATION_OR_WORKMODE_REGEX.test(cleanedComp)
+        ) {
+          company = cleanedComp;
+        }
+      }
+      // Subcase 3b: Part 1 is Company, Part 2 is Role (e.g. "HighLevel - Staff Product Manager")
+      else if (!part1IsRole && part2IsRole) {
+        const cleanedComp = part1.trim();
+        if (
+          cleanedComp &&
+          !GENERIC_COMPANY_BLOCKLIST.has(cleanedComp.toLowerCase()) &&
+          !LOCATION_OR_WORKMODE_REGEX.test(cleanedComp)
+        ) {
+          company = cleanedComp;
+          title = part2;
+        }
+      }
+    }
+  }
+
+  return { title: cleanDisplayTitle(title), company };
 }
 
 /**
@@ -126,6 +338,7 @@ export function cleanDisplayTitle(rawTitle: string): string {
   if (!rawTitle) return 'Untitled Role';
 
   return rawTitle
+    .replace(/^#{1,6}\s+/, '') // Remove leading markdown header syntax
     .replace(/^(hiring for|urgent requirement|job opening|wanted|seeking|open role):?\s*/i, '')
     .replace(/\s*[\(\[](remote|hybrid|on-site|full-time|f\/m\/d|m\/f\/d)[\)\]]/gi, '')
     .replace(/\s+at\s+[\w\s\.-]+$/i, '') // e.g. "Product Manager at Sarvam AI" -> "Product Manager"
@@ -148,9 +361,9 @@ export function normalizeLocation(rawLocation: string): { location: string; coun
 
   let country: string | null = null;
 
-  if (lower.includes('india') || lower.includes('bengaluru') || lower.includes('bangalore') || lower.includes('mumbai') || lower.includes('delhi') || lower.includes('pune') || lower.includes('hyderabad')) {
+  if (lower.includes('india') || lower.includes('bengaluru') || lower.includes('bangalore') || lower.includes('mumbai') || lower.includes('delhi') || lower.includes('pune') || lower.includes('hyderabad') || lower.includes('noida') || lower.includes('gurgaon') || lower.includes('gurugram')) {
     country = 'India';
-  } else if (lower.includes('united states') || lower.includes('usa') || lower.includes('u.s.') || lower.includes('california') || lower.includes('san francisco') || lower.includes('new york')) {
+  } else if (lower.includes('united states') || lower.includes('usa') || lower.includes('u.s.') || lower.includes('california') || lower.includes('san francisco') || lower.includes('new york') || lower.includes('austin') || lower.includes('seattle')) {
     country = 'United States';
   } else if (lower.includes('united kingdom') || lower.includes('uk') || lower.includes('london')) {
     country = 'United Kingdom';
@@ -163,6 +376,212 @@ export function normalizeLocation(rawLocation: string): { location: string; coun
   }
 
   return { location: cleaned, country };
+}
+
+/**
+ * Extracts a concise, explicit location from text or structured fields.
+ * NEVER returns raw multi-line page bodies or paragraphs.
+ */
+export function extractCleanLocation(
+  locationCandidate?: string | null,
+  bodySnippet?: string,
+  title?: string
+): { location: string; country: string | null } {
+  // 1. If explicit location candidate is provided, clean and validate
+  if (locationCandidate && typeof locationCandidate === 'string') {
+    const trimmed = locationCandidate.replace(/\s+/g, ' ').trim();
+    if (
+      trimmed.length > 0 &&
+      trimmed.length <= 80 &&
+      !trimmed.startsWith('#') &&
+      !trimmed.includes('\n') &&
+      !GENERIC_COMPANY_BLOCKLIST.has(trimmed.toLowerCase())
+    ) {
+      return normalizeLocation(trimmed);
+    }
+  }
+
+  const searchableText = `${title || ''}\n${(bodySnippet || '').slice(0, 1500)}`;
+
+  // 2. Check for explicit labeled metadata patterns (e.g. "Location: Bengaluru, India")
+  const labeledPatterns = [
+    /(?:Location|Office location|Job location|Based in)\s*[:|-]\s*([A-Za-z\s,.-]+?)(?:\n|\r|\||#|\.\s|$)/i,
+    /(?:Locations?)\s*[:|-]\s*([A-Za-z\s,.-]+?)(?:\n|\r|\||#|\.\s|$)/i,
+  ];
+
+  for (const pattern of labeledPatterns) {
+    const match = searchableText.match(pattern);
+    if (match && match[1]) {
+      const candidate = match[1].replace(/\s+/g, ' ').trim();
+      if (
+        candidate.length >= 2 &&
+        candidate.length <= 60 &&
+        !candidate.startsWith('#') &&
+        !GENERIC_COMPANY_BLOCKLIST.has(candidate.toLowerCase())
+      ) {
+        return normalizeLocation(candidate);
+      }
+    }
+  }
+
+  // 3. Check for well-known city / region matches
+  const knownCitiesRegex =
+    /\b(Bengaluru|Bangalore|Mumbai|Delhi|New Delhi|Hyderabad|Pune|Chennai|Gurugram|Gurgaon|Noida|San Francisco|New York|London|Berlin|Singapore|Toronto|Seattle|Austin)\b(?:,\s*([A-Za-z\s]+))?/i;
+  const cityMatch = searchableText.match(knownCitiesRegex);
+  if (cityMatch) {
+    const city = cityMatch[1].trim();
+    const stateOrCountry = cityMatch[2] ? `, ${cityMatch[2].trim()}` : '';
+    const locStr = `${city}${stateOrCountry}`;
+    if (locStr.length <= 60) {
+      return normalizeLocation(locStr);
+    }
+  }
+
+  // 4. Check for Remote indicator
+  if (/\b(remote|work from home|anywhere)\b/i.test(searchableText)) {
+    if (/\b(india)\b/i.test(searchableText)) {
+      return normalizeLocation('Remote, India');
+    }
+    return normalizeLocation('Remote');
+  }
+
+  // 5. Check for country-only match
+  if (/\b(India)\b/i.test(searchableText)) {
+    return normalizeLocation('India');
+  }
+  if (/\b(United States|USA)\b/i.test(searchableText)) {
+    return normalizeLocation('United States');
+  }
+  if (/\b(United Kingdom|UK)\b/i.test(searchableText)) {
+    return normalizeLocation('United Kingdom');
+  }
+
+  return { location: 'Undisclosed', country: null };
+}
+
+/**
+ * Strips markdown headers, navigation noise, and boilerplate from job descriptions.
+ * Produces clean, readable plain text.
+ */
+export function cleanJobDescription(rawContent: string, title?: string, company?: string): string {
+  if (!rawContent) return '';
+
+  let text = rawContent;
+
+  // 1. Remove markdown links: [Link text](http://...) -> Link text
+  text = text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1');
+
+  // 2. Remove image tags: ![Alt text](http://...) -> empty
+  text = text.replace(/!\[[^\]]*\]\([^)]+\)/g, '');
+
+  // 3. Remove markdown headers syntax (#, ##, ###)
+  text = text.replace(/^#{1,6}\s+/gm, '');
+
+  // 4. Remove bold/italics
+  text = text.replace(/(\*\*|__)(.*?)\1/g, '$2');
+  text = text.replace(/(\*|_)(.*?)\1/g, '$2');
+
+  // 5. Remove common noise lines
+  const noiseLinePatterns = [
+    /^(apply for this job|apply now|share this job|back to all jobs|view all jobs)/i,
+    /^(powered by ashby|powered by greenhouse|powered by lever)/i,
+    /^(follow us on|connect with us|privacy policy|terms of service)/i,
+    /^©\s*\d{4}/i,
+  ];
+
+  const lines = text.split('\n');
+  const cleanedLines: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (cleanedLines.length > 0 && cleanedLines[cleanedLines.length - 1] !== '') {
+        cleanedLines.push('');
+      }
+      continue;
+    }
+
+    if (noiseLinePatterns.some((p) => p.test(trimmed))) {
+      continue;
+    }
+
+    // Skip redundant title/company repetition in initial lines
+    if (cleanedLines.length <= 2) {
+      if (title && normalizeText(trimmed) === normalizeText(title)) continue;
+      if (company && normalizeText(trimmed) === normalizeText(company)) continue;
+    }
+
+    cleanedLines.push(trimmed);
+  }
+
+  return cleanedLines.join('\n').replace(/\n{3,}/g, '\n\n').trim().slice(0, 800);
+}
+
+/**
+ * Extracts structured requirement bullets from page content.
+ * Targets actual requirement sections (e.g. Qualifications, Requirements, What you'll need).
+ */
+export function extractStructuredRequirements(content: string): string[] {
+  if (!content) return [];
+
+  const lines = content.split('\n');
+  const requirements: string[] = [];
+  let inRequirementsSection = false;
+
+  const reqSectionHeaderRegex =
+    /^(#+\s*)?(requirements|qualifications|what you('ll| will) (need|bring)|who you are|must have|skills|experience required|what we are looking for)/i;
+  const otherSectionHeaderRegex =
+    /^(#+\s*)?(benefits|what we offer|perks|compensation|about (the company|us)|equal opportunity|how to apply)/i;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line) continue;
+
+    if (reqSectionHeaderRegex.test(line)) {
+      inRequirementsSection = true;
+      continue;
+    }
+
+    if (otherSectionHeaderRegex.test(line)) {
+      inRequirementsSection = false;
+      continue;
+    }
+
+    if (inRequirementsSection) {
+      if (/^[\*\-•]\s+/.test(line)) {
+        const item = line.replace(/^[\*\-•]\s+/, '').trim();
+        if (item.length >= 15 && item.length <= 250) {
+          requirements.push(item);
+        }
+      }
+    }
+  }
+
+  // Fallback: If no section header was found, scan for bullets with requirement indicators
+  if (requirements.length === 0) {
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (/^[\*\-•]\s+/.test(trimmed)) {
+        const item = trimmed.replace(/^[\*\-•]\s+/, '').trim();
+        const lower = item.toLowerCase();
+        const hasReqSignal =
+          /\b(years?( of)? experience|experience (in|with)|proficiency in|knowledge of|ability to|responsible for|degree in|strong understanding|familiarity with|background in)\b/i.test(
+            lower
+          );
+        const isBenefitSignal =
+          /\b(health insurance|401k|paid time off|unlimited pto|free lunch|parental leave)\b/i.test(
+            lower
+          );
+        if (hasReqSignal && !isBenefitSignal && item.length >= 10 && item.length <= 250) {
+          requirements.push(item);
+        }
+      }
+    }
+  }
+
+  // Deduplicate and cap at 8 concise items
+  const uniqueReqs = Array.from(new Set(requirements));
+  return uniqueReqs.slice(0, 8);
 }
 
 /**
@@ -182,17 +601,18 @@ export function normalizeEmploymentType(val: string | null | undefined): Employm
 
 /**
  * Normalizes work mode (Remote / Hybrid / On-site).
+ * Strictly requires explicit keyword signals to avoid false inferences.
  */
 export function normalizeWorkMode(val: string | null | undefined, extraText?: string): WorkMode | null {
   const combined = `${val || ''} ${extraText || ''}`.toLowerCase();
 
-  if (combined.includes('remote') || combined.includes('work from home') || combined.includes('wfh')) {
+  if (/\b(remote|work from home|wfh|fully remote|anywhere)\b/i.test(combined)) {
     return 'Remote';
   }
-  if (combined.includes('hybrid') || combined.includes('flexible')) {
+  if (/\b(hybrid|flexible work|hybrid work|partially remote)\b/i.test(combined)) {
     return 'Hybrid';
   }
-  if (combined.includes('on-site') || combined.includes('onsite') || combined.includes('in-office') || combined.includes('office')) {
+  if (/\b(on-site|onsite|in-office|work from office|in person|in-person)\b/i.test(combined)) {
     return 'On-site';
   }
 
@@ -312,21 +732,23 @@ export function normalizeSearchResult(item: NormalizedSearchResult): JobListing 
   const canonicalUrl = canonicalizeUrl(item.url);
   if (!canonicalUrl) return null;
 
-  // Extract company: check for "at Company" or "| Company" or domain
-  let company = '';
-  const atMatch = rawTitle.match(/\bat\s+([^|\-–]+)/i);
-  if (atMatch && atMatch[1]) {
-    company = atMatch[1].trim();
-  } else {
-    company = cleanDisplayCompany('', item.domain);
-  }
+  // 1. Title & Company extraction
+  const { title: parsedTitle, company: parsedCompany } = extractCompanyAndTitle(rawTitle);
+  const companyFromUrl = extractCompanyFromUrl(canonicalUrl);
+  const company = cleanDisplayCompany(parsedCompany || companyFromUrl || '', item.domain, canonicalUrl);
+  const title = parsedTitle || cleanDisplayTitle(rawTitle);
 
-  const title = cleanDisplayTitle(rawTitle);
-  const { location, country } = normalizeLocation(item.snippet || rawTitle);
+  // 2. Clean Location (never full snippet)
+  const { location, country } = extractCleanLocation(null, item.snippet, rawTitle);
+
+  // 3. Work Mode & Seniority
   const workMode = normalizeWorkMode(null, `${rawTitle} ${item.snippet}`);
   const seniority = detectSeniority(rawTitle, item.snippet);
   const keywords = extractKeywords(title, item.snippet);
   const checkedAt = new Date().toISOString();
+
+  // 4. Clean Description
+  const description = cleanJobDescription(item.snippet || '', title, company);
 
   const id = generateJobId(company, title, location, canonicalUrl);
 
@@ -339,7 +761,7 @@ export function normalizeSearchResult(item: NormalizedSearchResult): JobListing 
     employmentType: normalizeEmploymentType(item.snippet),
     seniority,
     workMode,
-    description: item.snippet || '',
+    description,
     requirements: [],
     keywords,
     source: 'search',
@@ -367,30 +789,28 @@ export function normalizeFetchedJob(item: NormalizedFetchResult): JobListing | n
   const canonicalSourceUrl = canonicalizeUrl(item.url || item.finalUrl);
   if (!canonicalApplyUrl) return null;
 
-  const title = cleanDisplayTitle(item.title);
-  const company = cleanDisplayCompany('', item.domain);
+  // 1. Title & Company extraction
+  const { title: parsedTitle, company: parsedCompany } = extractCompanyAndTitle(item.title);
+  const companyFromUrl = extractCompanyFromUrl(canonicalApplyUrl) || extractCompanyFromUrl(canonicalSourceUrl);
+  const company = cleanDisplayCompany(parsedCompany || companyFromUrl || '', item.domain, canonicalApplyUrl);
+  const title = parsedTitle || cleanDisplayTitle(item.title);
 
-  // Parse lines for bullet points/requirements
+  // 2. Requirements: parse structured bullets under requirements sections
   const content = item.content || '';
-  const lines = content.split('\n');
-  const extractedRequirements: string[] = [];
+  const extractedRequirements = extractStructuredRequirements(content);
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('* ') || trimmed.startsWith('- ') || trimmed.startsWith('• ')) {
-      const bulletText = trimmed.replace(/^[\*\-•]\s*/, '').trim();
-      if (bulletText.length > 10 && bulletText.length < 300) {
-        extractedRequirements.push(bulletText);
-      }
-    }
-  }
+  // 3. Clean Location: search for explicit metadata, not giant body
+  const { location, country } = extractCleanLocation(null, content, item.title);
 
-  const { location, country } = normalizeLocation(content.slice(0, 1000) || item.title);
-  const workMode = normalizeWorkMode(null, `${item.title} ${content.slice(0, 500)}`);
-  const employmentType = normalizeEmploymentType(content.slice(0, 500));
+  // 4. Work Mode, Seniority, Employment Type
+  const workMode = normalizeWorkMode(null, `${item.title} ${content.slice(0, 1000)}`);
+  const employmentType = normalizeEmploymentType(content.slice(0, 1000));
   const seniority = detectSeniority(title, content);
   const keywords = extractKeywords(title, content, extractedRequirements);
   const checkedAt = item.checkedAt || new Date().toISOString();
+
+  // 5. Clean Description: strip markdown headers, noise lines, and nav fragments
+  const description = cleanJobDescription(item.description || content, title, company);
 
   const id = generateJobId(company, title, location, canonicalApplyUrl);
 
@@ -403,8 +823,8 @@ export function normalizeFetchedJob(item: NormalizedFetchResult): JobListing | n
     employmentType,
     seniority,
     workMode,
-    description: item.description || content.slice(0, 600),
-    requirements: extractedRequirements.slice(0, 10),
+    description,
+    requirements: extractedRequirements,
     keywords,
     source: 'fetch',
     sourceUrl: canonicalSourceUrl,
@@ -427,21 +847,33 @@ export function normalizeFetchedJob(item: NormalizedFetchResult): JobListing | n
 export function normalizeAgentJob(item: AgentJobItem): JobListing | null {
   if (!item || !item.title) return null;
 
-  const title = cleanDisplayTitle(item.title);
   const canonicalApplyUrl = canonicalizeUrl(item.apply_url || item.source_url);
   const canonicalSourceUrl = canonicalizeUrl(item.source_url || item.apply_url);
   if (!canonicalApplyUrl) return null;
 
-  const company = cleanDisplayCompany(item.company || 'Unknown Company');
-  const { location, country } = normalizeLocation(item.location || 'Undisclosed');
+  const { title: parsedTitle, company: parsedCompany } = extractCompanyAndTitle(item.title);
+  const companyFromUrl = extractCompanyFromUrl(canonicalApplyUrl) || extractCompanyFromUrl(canonicalSourceUrl);
+  const company = cleanDisplayCompany(
+    item.company || parsedCompany || companyFromUrl || 'Unknown Company',
+    undefined,
+    canonicalApplyUrl
+  );
+  const title = parsedTitle || cleanDisplayTitle(item.title);
+
+  const { location, country } = extractCleanLocation(item.location, item.description, title);
   const employmentType = normalizeEmploymentType(item.employment_type);
-  const workMode = normalizeWorkMode(item.work_mode, item.location);
+  const workMode = normalizeWorkMode(item.work_mode, item.location || undefined);
   const seniority = detectSeniority(title, item.description);
+
   const requirements = Array.isArray(item.requirements)
-    ? item.requirements.map((r) => String(r).trim()).filter(Boolean)
+    ? item.requirements
+        .map((r) => String(r).replace(/^[\*\-•]\s*/, '').trim())
+        .filter((r) => r.length >= 10 && r.length <= 250)
     : [];
+
   const keywords = extractKeywords(title, item.description, requirements);
   const checkedAt = new Date().toISOString();
+  const description = cleanJobDescription(item.description || '', title, company);
 
   const id = generateJobId(company, title, location, canonicalApplyUrl);
 
@@ -454,8 +886,8 @@ export function normalizeAgentJob(item: AgentJobItem): JobListing | null {
     employmentType,
     seniority,
     workMode,
-    description: item.description || '',
-    requirements,
+    description,
+    requirements: requirements.slice(0, 10),
     keywords,
     source: 'agent',
     sourceUrl: canonicalSourceUrl,

@@ -16,13 +16,13 @@ export function buildJobDiscoveryAgentGoal(params: {
   const kwStr = params.keywords.length > 0 ? params.keywords.join(', ') : 'Any relevant skills';
 
   return `
-1. Open the supplied live careers page.
-2. Search, filter, or browse for open positions matching:
+1. Open the supplied careers page.
+2. Find open roles matching:
    - Role: ${params.role}
    - Location: ${params.location}
-   - Keywords: ${kwStr}
-3. Find CURRENT/open roles only. Do not include closed or expired jobs.
-4. Navigate the site, click into search or department filters if needed to locate matching openings.
+   - Skills/Keywords: ${kwStr}
+3. If the page has a search bar or department filter, use it to search for "${params.role}".
+4. Extract open positions listed on this hub directly, including job title, location, description or summary, and apply/view link.
 5. Return structured JSON with this exact schema:
 {
   "jobs": [
@@ -41,9 +41,8 @@ export function buildJobDiscoveryAgentGoal(params: {
 }
 
 Important rules:
-- Do not invent missing information. If a field is unavailable, return null or an empty array.
-- Do not include closed jobs.
-- apply_url must be a real URL found on the page (or full URL link to apply).
+- Do not invent information. If unavailable, return null or empty array.
+- apply_url must be the direct link to the posting or application.
 - Return valid JSON matching the schema above.
 `.trim();
 }
@@ -76,7 +75,7 @@ export async function runTinyFishAgent(
     keywords: params.keywords || [],
   });
 
-  const timeoutMs = params.timeoutMs ?? 25000;
+  const timeoutMs = params.timeoutMs ?? 60000;
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`TinyFish Agent timed out after ${timeoutMs}ms`));

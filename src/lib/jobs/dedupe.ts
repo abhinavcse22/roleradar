@@ -84,7 +84,7 @@ export function areJobsDuplicates(a: JobListing, b: JobListing): boolean {
  * Merges two duplicate JobListing records, keeping the most authoritative, complete data.
  */
 export function mergeJobs(existing: JobListing, incoming: JobListing): JobListing {
-  // Source authority: Agent > Fetch > Search
+  // Source authority weights: Agent (3) > Fetch (2) > Search (1)
   const sourceWeight = (s: string) => {
     if (s === 'agent') return 3;
     if (s === 'fetch') return 2;
@@ -92,43 +92,63 @@ export function mergeJobs(existing: JobListing, incoming: JobListing): JobListin
     return 0;
   };
 
-  const incomingHigherAuthority = sourceWeight(incoming.source) > sourceWeight(existing.source);
+  const incomingHigher = sourceWeight(incoming.source) > sourceWeight(existing.source);
 
-  // Title: prefer higher authority, then longer non-empty
-  const title = incomingHigherAuthority && incoming.title ? incoming.title : existing.title || incoming.title;
+  // 1. TITLE: Agent > Fetch > Search
+  let title = existing.title;
+  if (incomingHigher && incoming.title && incoming.title !== 'Untitled Role') {
+    title = incoming.title;
+  } else if (!title || title === 'Untitled Role') {
+    title = incoming.title || title;
+  }
 
-  // Company: prefer non-empty, longer, or higher-authority name
-  let company = existing.company || incoming.company;
-  if (!existing.company || existing.company === 'Unknown Company') {
+  // 2. COMPANY: Reliable structured metadata > deterministic ATS URL fallback > Search (never "Jobs")
+  const isBadCompany = (c: string) =>
+    !c ||
+    c === 'Unknown Company' ||
+    c.toLowerCase() === 'jobs' ||
+    c.toLowerCase() === 'boards' ||
+    c.toLowerCase() === 'careers';
+
+  let company = existing.company;
+  if (isBadCompany(company) && !isBadCompany(incoming.company)) {
     company = incoming.company;
-  } else if (incoming.company && incoming.company !== 'Unknown Company') {
-    if (incoming.company.length > existing.company.length || incomingHigherAuthority) {
+  } else if (!isBadCompany(incoming.company) && !isBadCompany(company)) {
+    if (incomingHigher) {
       company = incoming.company;
     }
   }
 
-  // Location: prefer more detailed location
-  const location =
-    (incoming.location?.length ?? 0) > (existing.location?.length ?? 0)
-      ? incoming.location
-      : existing.location || incoming.location;
+  // 3. LOCATION: Reliable structured metadata (non-undisclosed, <= 80 chars) > Search
+  const isGoodLocation = (loc: string) =>
+    loc && loc !== 'Undisclosed' && loc.length <= 80 && !loc.includes('\n');
 
-  const country = existing.country || incoming.country;
-  const employmentType = existing.employmentType || incoming.employmentType;
-  const seniority = existing.seniority || incoming.seniority;
-  const workMode = existing.workMode || incoming.workMode;
+  let location = existing.location;
+  let country = existing.country || incoming.country;
+  if (!isGoodLocation(location) && isGoodLocation(incoming.location)) {
+    location = incoming.location;
+    country = incoming.country || country;
+  } else if (isGoodLocation(incoming.location) && incomingHigher) {
+    location = incoming.location;
+    country = incoming.country || country;
+  }
 
-  // Description: prefer longest, richest content
-  const description =
-    (incoming.description?.length ?? 0) > (existing.description?.length ?? 0)
-      ? incoming.description
-      : existing.description || incoming.description;
+  // 4. DESCRIPTION: Fetch > Agent > Search (cleaned plain text)
+  // Fetch reads the full direct job page, so its description is most authoritative
+  let description = existing.description;
+  if (existing.source === 'search' && (incoming.source === 'fetch' || incoming.source === 'agent')) {
+    description = incoming.description;
+  } else if (incoming.source === 'fetch' && existing.source === 'agent' && incoming.description) {
+    description = incoming.description;
+  } else if (!description && incoming.description) {
+    description = incoming.description;
+  }
 
-  // Requirements: union of distinct items
+  // 5. REQUIREMENTS: Merge union of Agent + Fetch > Search
   const reqSet = new Set<string>();
   const normalizedReqKeys = new Set<string>();
 
-  for (const req of [...existing.requirements, ...incoming.requirements]) {
+  for (const req of [...incoming.requirements, ...existing.requirements]) {
     const trimmed = req.trim();
     const key = normalizeText(trimmed);
     if (key && !normalizedReqKeys.has(key)) {
@@ -137,10 +157,15 @@ export function mergeJobs(existing: JobListing, incoming: JobListing): JobListin
     }
   }
 
-  // Keywords: union
+  // 6. WORK MODE & EMPLOYMENT TYPE: Prefer non-null
+  const workMode = existing.workMode || incoming.workMode;
+  const employmentType = existing.employmentType || incoming.employmentType;
+  const seniority = existing.seniority || incoming.seniority;
+
+  // 7. KEYWORDS: Union of distinct keywords
   const keywordSet = new Set<string>([...existing.keywords, ...incoming.keywords]);
 
-  // Apply URL: prefer specific direct application URL (e.g. ashby, greenhouse, lever, /application)
+  // 8. APPLY URL: Explicit direct ATS application URL > Search URL
   const isDirectApply = (url: string) =>
     url.includes('ashbyhq.com') ||
     url.includes('greenhouse.io') ||
@@ -181,7 +206,7 @@ export function mergeJobs(existing: JobListing, incoming: JobListing): JobListin
     seniority,
     workMode,
     description,
-    requirements: Array.from(reqSet),
+    requirements: Array.from(reqSet).slice(0, 10),
     keywords: Array.from(keywordSet).sort(),
     source,
     sourceUrl: canonicalizeUrl(existing.sourceUrl || incoming.sourceUrl),

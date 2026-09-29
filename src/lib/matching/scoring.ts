@@ -122,10 +122,18 @@ export function scoreLocation(
   const directMatch =
     normJobLoc.includes(normUserLoc) || normUserLoc.includes(normJobLoc);
 
+  const displayLoc =
+    jobLocation.length > 50 ? `${jobLocation.slice(0, 50).trim()}...` : jobLocation;
+
   if (directMatch || countryMatches) {
+    const locExplanation =
+      countryMatches && !directMatch && jobCountry
+        ? `Location matches country: ${jobCountry}`
+        : `Location matches "${displayLoc}"`;
+
     return {
       score: 20,
-      reason: `Location matches "${jobLocation}"`,
+      reason: locExplanation,
       isMismatch: false,
     };
   }
@@ -133,7 +141,7 @@ export function scoreLocation(
   // Geographic mismatch
   return {
     score: 0,
-    warning: `Location "${jobLocation}" does not match requested "${userLocation}"`,
+    warning: `Location "${displayLoc}" does not match requested "${userLocation}"`,
     isMismatch: true,
   };
 }
