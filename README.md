@@ -17,50 +17,40 @@ RoleRadar solves this by pulling directly from live company careers pages and mo
 
 ---
 
-## 2. Product Workflow
+---
 
-RoleRadar operates as a coordinated 6-stage discovery pipeline:
+## 2. End-to-End Pipeline
+
+Search discovers live sources. Fetch reads straightforward direct job postings. Agent handles dynamic career hubs and browser interaction. All results flow through one normalization, deduplication, and deterministic ranking layer.
 
 ```
-                  ┌───────────────────────────────┐
-                  │       USER PREFERENCES        │
-                  │  Role • Location • Seniority  │
-                  │  Keywords • WorkMode • Visa   │
-                  └───────────────┬───────────────┘
-                                  │
-                                  ▼
-                     [ Stage 1: TinyFish Search ]
-                Targeted discovery queries across live
-                 ATS portals (Ashby, Greenhouse, Lever)
-                  and live company careers destinations
-                                  │
-                   ┌──────────────┴──────────────┐
-                   │                             │
-                   ▼                             ▼
-       Direct Job URLs Discovered     Dynamic Career Portals
-                   │                             │
-                   ▼                             ▼
-      [ Stage 2: TinyFish Fetch ]   [ Stage 3: TinyFish Agent ]
-       Full-browser clean markdown    Autonomous navigation,
-       extraction from actual job      filtering & structured
-       postings (strips web junk)      extraction with JSON schema
-                   │                             │
-                   └──────────────┬──────────────┘
-                                  │
-                                  ▼
-                      [ Stage 4: Deduplication ]
-                   Canonical URL & title normalization;
-                     multi-source deduplication merge
-                                  │
-                                  ▼
-                   [ Stage 5: Explainable Match ]
-                  Role fit • Location & remote policy •
-                 Keywords • Seniority • Visa sponsorship
-                                  │
-                                  ▼
-                 [ Stage 6: Ranked Verified Feed ]
-                   Real-time SSE streamed to client
+Search
+  ↓
+Classify
+  ├── Direct job → Fetch
+  └── Career hub → Agent
+  ↓
+Normalize
+  ↓
+Deduplicate
+  ↓
+Match
+  ↓
+Filter
+  ↓
+Rank
 ```
+
+### Discovery & Processing Stages
+
+1. **Search**: Targeted multi-query discovery across live ATS subdomains (Ashby, Greenhouse, Lever) and native company careers pages.
+2. **Classify**: Deterministic URL routing distinguishing direct job postings from career hub portals.
+3. **Fetch**: Full-browser reading of direct job posting pages into clean, token-efficient markdown.
+4. **Agent**: Autonomous browser navigation, interaction, and structured JSON extraction on dynamic career hubs.
+5. **Normalize**: Universal transformation of all incoming records into the canonical `JobListing` schema.
+6. **Deduplicate**: Canonical multi-signal deduplication merging duplicates across discovery vectors into authoritative records with audit provenance.
+7. **Match & Filter**: 100-point deterministic scoring against user preferences, filtering out ineligible listings.
+8. **Rank**: Deterministic ranking by match score, role alignment, and verification recency.
 
 ---
 
