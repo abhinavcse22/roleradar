@@ -14,6 +14,8 @@ export interface PipelineStats {
   careerHubCandidates: number;
   fetchedPages: number;
   agentRuns: number;
+  agentFailures: number;
+  agentJobsExtracted: number;
   normalizedJobs: number;
   uniqueJobs: number;
   eligibleJobs: number;

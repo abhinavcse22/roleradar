@@ -18,10 +18,19 @@ export function classifyUrl(rawUrl: string): UrlCategory {
     // Filter out obvious aggregator listing / search pages
     if (
       host.includes('google.') ||
-      (host.includes('linkedin.com') && pathname.includes('/jobs/search')) ||
-      (host.includes('indeed.') && (pathname.includes('/q-') || pathname.includes('/jobs'))) ||
-      (host.includes('glassdoor.') && pathname.includes('/Job/')) ||
-      (host.includes('naukri.com') && pathname.includes('-jobs'))
+      host.includes('bing.') ||
+      host.includes('yahoo.') ||
+      (host.includes('linkedin.com') && !pathname.includes('/jobs/view/')) ||
+      (host.includes('indeed.') && !pathname.includes('/viewjob') && !parsed.searchParams.has('vjk')) ||
+      (host.includes('glassdoor.') && !pathname.includes('/job-listing/')) ||
+      (host.includes('naukri.com') && !pathname.includes('/job-listings-')) ||
+      host.includes('ziprecruiter.com') ||
+      host.includes('simplyhired.') ||
+      host.includes('monster.com') ||
+      host.includes('talent.com') ||
+      host.includes('jooble.org') ||
+      host.includes('jobgether.com') ||
+      host.includes('un.org')
     ) {
       return 'other';
     }

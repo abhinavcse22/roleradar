@@ -109,6 +109,8 @@ export interface TinyFishAgentSSEEvent {
   streaming_url?: string;
   timestamp?: string;
   result?: unknown;
+  resultJson?: unknown;
+  result_json?: unknown;
   error?: string | { message?: string; [key: string]: unknown };
   [key: string]: unknown;
 }

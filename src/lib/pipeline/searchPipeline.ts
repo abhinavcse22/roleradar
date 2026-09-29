@@ -47,7 +47,7 @@ export function generateSearchQueries(preferences: UserPreferences): string[] {
 /**
  * Executes an array of async tasks with bounded concurrency.
  */
-async function runWithConcurrency<T, R>(
+export async function runWithConcurrency<T, R>(
   items: T[],
   limit: number,
   fn: (item: T) => Promise<R>
@@ -77,6 +77,79 @@ async function runWithConcurrency<T, R>(
 }
 
 /**
+ * Computes a domain-aware relevance score for a candidate career hub.
+ * Prioritizes high-signal ATS portals (Lever, Ashby, Greenhouse) and company career
+ * subdomains matching user preferences, while heavily downranking unrelated domains.
+ */
+export function scoreHubRelevance(
+  hub: NormalizedSearchResult,
+  preferences: UserPreferences
+): number {
+  let score = 0;
+  const urlLower = (hub.url || '').toLowerCase();
+  const titleLower = (hub.title || '').toLowerCase();
+  const snippetLower = (hub.snippet || '').toLowerCase();
+  const combined = `${urlLower} ${titleLower} ${snippetLower}`;
+
+  // 1. High-priority ATS company hubs
+  if (urlLower.includes('lever.co')) score += 30;
+  if (urlLower.includes('ashbyhq.com')) score += 30;
+  if (urlLower.includes('greenhouse.io')) score += 25;
+  if (urlLower.includes('myworkdayjobs.com')) score += 20;
+
+  // 2. Company careers subdomains and paths
+  if (urlLower.includes('careers.') || urlLower.includes('jobs.')) score += 15;
+  if (urlLower.includes('/careers') || urlLower.includes('/jobs')) score += 10;
+
+  // 3. Role relevance
+  const roleWords = (preferences.role || '').toLowerCase().split(/\s+/).filter((w) => w.length > 2);
+  for (const w of roleWords) {
+    if (combined.includes(w)) score += 12;
+  }
+
+  // 4. Keyword relevance
+  for (const kw of preferences.keywords || []) {
+    if (combined.includes(kw.toLowerCase())) score += 8;
+  }
+
+  // 5. Location relevance
+  const locWords = (preferences.location || '').toLowerCase().split(/[\s,]+/).filter((w) => w.length > 2);
+  for (const loc of locWords) {
+    if (combined.includes(loc)) score += 6;
+  }
+
+  // 6. Technology / Software company signals
+  if (/\b(tech|software|ai|saas|cloud|engineering|analytics)\b/i.test(combined)) {
+    score += 8;
+  }
+
+  // 7. Heavily penalize non-tech government, hospitality, or retail career pages
+  if (
+    urlLower.includes('un.org') ||
+    urlLower.includes('hyatt.com') ||
+    urlLower.includes('ihg.com') ||
+    urlLower.includes('autonation.com') ||
+    urlLower.includes('marriott.') ||
+    urlLower.includes('hilton.')
+  ) {
+    score -= 100;
+  }
+
+  return score;
+}
+
+export function rankCareerHubs(
+  hubs: NormalizedSearchResult[],
+  preferences: UserPreferences
+): NormalizedSearchResult[] {
+  return [...hubs].sort((a, b) => {
+    const scoreA = scoreHubRelevance(a, preferences);
+    const scoreB = scoreHubRelevance(b, preferences);
+    return scoreB - scoreA;
+  });
+}
+
+/**
  * Main End-to-End Search Pipeline Orchestrator.
  * Connects TinyFish Search -> Classify -> TinyFish Fetch / Agent ->
  * Normalize -> Deduplicate -> Match -> Hard Filter -> Deterministic Rank.
@@ -92,6 +165,8 @@ export async function searchJobs(
     careerHubCandidates: 0,
     fetchedPages: 0,
     agentRuns: 0,
+    agentFailures: 0,
+    agentJobsExtracted: 0,
     normalizedJobs: 0,
     uniqueJobs: 0,
     eligibleJobs: 0,
@@ -196,41 +271,44 @@ export async function searchJobs(
   // -------------------------------------------------------------
   // 4. TinyFish Agent Phase (Dynamic Career Hubs)
   // -------------------------------------------------------------
-  // Run Agent selectively on top discovered career hub with bounded timeout
-  const careerHubsForAgent = careerHubCandidates
-    .map((item) => item.url)
-    .filter((url) => !handledUrls.has(canonicalizeUrl(url)))
-    .slice(0, 1);
+  // Select top career hubs ranked by role, ATS, and keyword relevance
+  const rankedHubs = rankCareerHubs(careerHubCandidates, preferences);
+  const careerHubsForAgent = rankedHubs
+    .filter((item) => !handledUrls.has(canonicalizeUrl(item.url)))
+    .slice(0, 2); // Bounded concurrency: max 2 simultaneous Agent runs
 
   if (careerHubsForAgent.length > 0) {
     const agentSettled = await runWithConcurrency(
       careerHubsForAgent,
-      1, // Single agent execution to ensure bounded resource usage
-      async (url) => {
+      2, // Bounded concurrency limit of 2 for Agent
+      async (hubItem) => {
         return await runTinyFishAgent({
-          url,
+          url: hubItem.url,
           role: preferences.role,
           location: preferences.location,
           keywords: preferences.keywords || [],
-          timeoutMs: 65000, // 65s bounded timeout to allow deep browser automation
         });
       }
     );
 
     for (let i = 0; i < agentSettled.length; i++) {
       const res = agentSettled[i];
-      const targetUrl = careerHubsForAgent[i];
+      const targetUrl = careerHubsForAgent[i].url;
       handledUrls.add(canonicalizeUrl(targetUrl));
 
       if (res.status === 'fulfilled' && res.value.success) {
         stats.agentRuns++;
+        let extractedFromThisHub = 0;
         for (const agentJobItem of res.value.jobs) {
           const normJob = normalizeAgentJob(agentJobItem);
           if (normJob) {
             candidateJobListings.push(normJob);
+            extractedFromThisHub++;
           }
         }
+        stats.agentJobsExtracted += extractedFromThisHub;
       } else {
+        stats.agentFailures++;
         stats.failedSources++;
       }
     }

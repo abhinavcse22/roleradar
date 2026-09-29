@@ -21,8 +21,8 @@ export function buildJobDiscoveryAgentGoal(params: {
    - Role: ${params.role}
    - Location: ${params.location}
    - Skills/Keywords: ${kwStr}
-3. If the page has a search bar or department filter, use it to search for "${params.role}".
-4. Extract open positions listed on this hub directly, including job title, location, description or summary, and apply/view link.
+3. If the page has a search bar or filter, search for "${params.role}".
+4. Extract open positions listed on this hub directly (up to 10 matching roles).
 5. Return structured JSON with this exact schema:
 {
   "jobs": [
@@ -41,8 +41,8 @@ export function buildJobDiscoveryAgentGoal(params: {
 }
 
 Important rules:
-- Do not invent information. If unavailable, return null or empty array.
-- apply_url must be the direct link to the posting or application.
+- Do not invent fields. If unavailable, return null or empty array.
+- apply_url must be the direct link to the posting or application found on the site.
 - Return valid JSON matching the schema above.
 `.trim();
 }
@@ -75,7 +75,12 @@ export async function runTinyFishAgent(
     keywords: params.keywords || [],
   });
 
-  const timeoutMs = params.timeoutMs ?? 60000;
+  const envTimeout = process.env.TINYFISH_AGENT_TIMEOUT_MS
+    ? parseInt(process.env.TINYFISH_AGENT_TIMEOUT_MS, 10)
+    : 60000;
+  const timeoutMs =
+    params.timeoutMs ?? (isNaN(envTimeout) || envTimeout <= 0 ? 60000 : envTimeout);
+
   const controller = new AbortController();
   const timeoutId = setTimeout(() => {
     controller.abort(new Error(`TinyFish Agent timed out after ${timeoutMs}ms`));
@@ -174,14 +179,20 @@ export async function runTinyFishAgent(
 
           params.onProgress?.(event);
 
-          if (
+          const isTerminal =
             eventType === 'COMPLETE' ||
+            eventType === 'ERROR' ||
+            eventType === 'FAILED' ||
+            eventType === 'CANCELLED' ||
             event.status === 'COMPLETED' ||
-            event.status === 'FAILED'
-          ) {
+            event.status === 'FAILED' ||
+            event.status === 'CANCELLED' ||
+            event.status === 'ERROR';
+
+          if (isTerminal) {
             finalStatus =
-              event.status || (eventType === 'COMPLETE' ? 'COMPLETED' : 'UNKNOWN');
-            finalResult = event.result;
+              event.status || (eventType === 'COMPLETE' ? 'COMPLETED' : eventType);
+            finalResult = event.resultJson ?? event.result ?? event.result_json;
 
             if (event.error) {
               agentError =
@@ -213,15 +224,33 @@ export async function runTinyFishAgent(
     }
   }
 
-  // Parse structured jobs from finalResult
+  // Parse structured jobs from finalResult (handling both object and serialized JSON string)
+  let parsedObj: Record<string, unknown> | null = null;
+
+  if (typeof finalResult === 'string') {
+    try {
+      parsedObj = JSON.parse(finalResult);
+    } catch {
+      const codeBlock = finalResult.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
+      if (codeBlock) {
+        try {
+          parsedObj = JSON.parse(codeBlock[1]);
+        } catch {
+          parsedObj = null;
+        }
+      }
+    }
+  } else if (finalResult && typeof finalResult === 'object') {
+    parsedObj = finalResult as Record<string, unknown>;
+  }
+
   const jobs: AgentJobItem[] = [];
 
-  if (finalResult && typeof finalResult === 'object') {
-    const rawObj = finalResult as Record<string, unknown>;
-    const rawJobs = Array.isArray(rawObj.jobs)
-      ? rawObj.jobs
-      : Array.isArray(finalResult)
-      ? finalResult
+  if (parsedObj) {
+    const rawJobs = Array.isArray(parsedObj.jobs)
+      ? (parsedObj.jobs as unknown[])
+      : Array.isArray(parsedObj)
+      ? (parsedObj as unknown[])
       : [];
 
     for (const item of rawJobs) {
@@ -256,7 +285,8 @@ export async function runTinyFishAgent(
   }
 
   const isSuccess =
-    finalStatus === 'COMPLETED' && (!agentError || agentError.length === 0);
+    (finalStatus === 'COMPLETED' || finalStatus === 'COMPLETE') &&
+    (!agentError || agentError.length === 0);
 
   return {
     success: isSuccess,
