@@ -33,15 +33,15 @@ export function AgentStatusBanner({ runs, onCancelAll }: AgentStatusBannerProps)
   let summaryText = '';
   if (isAllTerminal) {
     if (completedRuns === totalRuns) {
-      summaryText = `${completedRuns} of ${totalRuns} career portals explored · ${totalExtracted} jobs extracted`;
+      summaryText = `${completedRuns} completed · 0 running · ${totalExtracted} jobs extracted`;
     } else {
-      summaryText = `${completedRuns} completed · ${failedRuns + cancelledRuns} incomplete · ${totalExtracted} jobs extracted`;
+      summaryText = `${completedRuns} completed · 0 running · ${failedRuns + cancelledRuns} incomplete · ${totalExtracted} jobs extracted`;
     }
   } else {
     if (completedRuns > 0) {
-      summaryText = `${completedRuns} completed · ${activeRuns.length} still exploring...`;
+      summaryText = `${completedRuns} completed · ${activeRuns.length} running`;
     } else {
-      summaryText = `${activeRuns.length} career portal${activeRuns.length > 1 ? 's are' : ' is'} exploring in the background...`;
+      summaryText = `${totalRuns} career portal${totalRuns > 1 ? 's' : ''} exploring`;
     }
   }
 
@@ -129,13 +129,13 @@ export function AgentStatusBanner({ runs, onCancelAll }: AgentStatusBannerProps)
                     <CheckCircle2 className="w-2.5 h-2.5" />
                     {run.jobsExtracted !== undefined && run.jobsExtracted > 0
                       ? `+${run.jobsExtracted} jobs`
-                      : 'COMPLETED'}
+                      : '0 jobs'}
                   </span>
                 )}
                 {isFailed && (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-950/60 text-red-400 border border-red-800/50">
                     <AlertCircle className="w-2.5 h-2.5" />
-                    FAILED
+                    Failed
                   </span>
                 )}
                 {isCancelled && (

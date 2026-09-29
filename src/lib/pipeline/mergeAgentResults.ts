@@ -9,8 +9,10 @@ import { ScoredJobListing } from './types';
 export interface MergeAgentResultsOutput {
   jobs: ScoredJobListing[];
   newJobsCount: number;
+  addedNormalizedCount: number;
   totalUniqueJobs: number;
   totalEligibleJobs: number;
+  totalFilteredJobs: number;
 }
 
 /**
@@ -31,8 +33,10 @@ export function mergeAgentResults(
     return {
       jobs: currentJobs,
       newJobsCount: 0,
+      addedNormalizedCount: 0,
       totalUniqueJobs: currentJobs.length,
       totalEligibleJobs: currentJobs.length,
+      totalFilteredJobs: 0,
     };
   }
 
@@ -49,8 +53,10 @@ export function mergeAgentResults(
     return {
       jobs: currentJobs,
       newJobsCount: 0,
+      addedNormalizedCount: 0,
       totalUniqueJobs: currentJobs.length,
       totalEligibleJobs: currentJobs.length,
+      totalFilteredJobs: 0,
     };
   }
 
@@ -116,7 +122,9 @@ export function mergeAgentResults(
   return {
     jobs: scoredJobs,
     newJobsCount: newlyAddedCount,
+    addedNormalizedCount: normalizedNewJobs.length,
     totalUniqueJobs: deduplicated.length,
     totalEligibleJobs: scoredJobs.length,
+    totalFilteredJobs: deduplicated.length - scoredJobs.length,
   };
 }

@@ -162,15 +162,20 @@ export async function searchJobs(
 
   const stats: PipelineStats = {
     searchResults: 0,
+    searchQueries: 0,
     directJobCandidates: 0,
     careerHubCandidates: 0,
+    fetchAttempted: 0,
     fetchedPages: 0,
     agentRuns: 0,
+    agentRunsStarted: 0,
+    agentRunsCompleted: 0,
     agentFailures: 0,
     agentJobsExtracted: 0,
     normalizedJobs: 0,
     uniqueJobs: 0,
     eligibleJobs: 0,
+    filteredJobs: 0,
     failedSources: 0,
   };
 
@@ -185,6 +190,7 @@ export async function searchJobs(
   // 1. TinyFish Search Phase
   // -------------------------------------------------------------
   const queries = generateSearchQueries(preferences);
+  stats.searchQueries = queries.length;
   const rawSearchResults: NormalizedSearchResult[] = [];
 
   const searchSettled = await Promise.allSettled(
@@ -243,6 +249,8 @@ export async function searchJobs(
     .filter(Boolean)
     .slice(0, 6);
 
+  stats.fetchAttempted = directUrlsToFetch.length;
+
   if (directUrlsToFetch.length > 0) {
     const fetchSettled = await runWithConcurrency(
       directUrlsToFetch,
@@ -278,6 +286,9 @@ export async function searchJobs(
     .filter((item) => !handledUrls.has(canonicalizeUrl(item.url)))
     .slice(0, 2); // Bounded concurrency: max 2 simultaneous Agent runs
 
+  stats.agentRunsStarted = careerHubsForAgent.length;
+  stats.agentRunsCompleted = 0;
+
   if (careerHubsForAgent.length > 0) {
     const agentSettled = await runWithConcurrency(
       careerHubsForAgent,
@@ -298,7 +309,8 @@ export async function searchJobs(
       handledUrls.add(canonicalizeUrl(targetUrl));
 
       if (res.status === 'fulfilled' && res.value.success) {
-        stats.agentRuns++;
+        stats.agentRunsCompleted = (stats.agentRunsCompleted || 0) + 1;
+        stats.agentRuns = stats.agentRunsCompleted;
         let extractedFromThisHub = 0;
         for (const agentJobItem of res.value.jobs) {
           const normJob = normalizeAgentJob(agentJobItem);
@@ -355,6 +367,7 @@ export async function searchJobs(
   }
 
   stats.eligibleJobs = scoredJobs.length;
+  stats.filteredJobs = stats.uniqueJobs - stats.eligibleJobs;
 
   // -------------------------------------------------------------
   // 8. Deterministic Ranking Phase
@@ -398,8 +411,10 @@ export async function startSearchJobs(
 
   const stats: PipelineStats = {
     searchResults: 0,
+    searchQueries: 0,
     directJobCandidates: 0,
     careerHubCandidates: 0,
+    fetchAttempted: 0,
     fetchedPages: 0,
     agentRuns: 0,
     agentRunsStarted: 0,
@@ -409,6 +424,7 @@ export async function startSearchJobs(
     normalizedJobs: 0,
     uniqueJobs: 0,
     eligibleJobs: 0,
+    filteredJobs: 0,
     failedSources: 0,
   };
 
@@ -423,6 +439,7 @@ export async function startSearchJobs(
   // 1. TinyFish Search Phase
   // -------------------------------------------------------------
   const queries = generateSearchQueries(preferences);
+  stats.searchQueries = queries.length;
   const rawSearchResults: NormalizedSearchResult[] = [];
 
   const searchSettled = await Promise.allSettled(
@@ -479,6 +496,8 @@ export async function startSearchJobs(
     .map((item) => item.url)
     .filter(Boolean)
     .slice(0, 6);
+
+  stats.fetchAttempted = directUrlsToFetch.length;
 
   if (directUrlsToFetch.length > 0) {
     const fetchSettled = await runWithConcurrency(
@@ -586,6 +605,7 @@ export async function startSearchJobs(
   }
 
   stats.eligibleJobs = scoredJobs.length;
+  stats.filteredJobs = stats.uniqueJobs - stats.eligibleJobs;
 
   // -------------------------------------------------------------
   // 8. Deterministic Ranking Phase

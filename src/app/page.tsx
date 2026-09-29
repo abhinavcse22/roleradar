@@ -149,8 +149,10 @@ export default function HomePage() {
                   const merged = mergeAgentResults(prev.jobs, rawJobs, lastPreferences);
                   const prevStats = prev.stats || {
                     searchResults: 0,
+                    searchQueries: 5,
                     directJobCandidates: 0,
                     careerHubCandidates: 0,
+                    fetchAttempted: 0,
                     fetchedPages: 0,
                     agentRuns: 0,
                     agentRunsStarted: activeRuns.length,
@@ -160,6 +162,7 @@ export default function HomePage() {
                     normalizedJobs: 0,
                     uniqueJobs: 0,
                     eligibleJobs: 0,
+                    filteredJobs: 0,
                     failedSources: 0,
                   };
                   return {
@@ -167,12 +170,15 @@ export default function HomePage() {
                     jobs: merged.jobs,
                     stats: {
                       ...prevStats,
-                      agentRuns: (prevStats.agentRuns ?? 0) + 1,
+                      agentRuns: (prevStats.agentRunsCompleted ?? 0) + 1,
                       agentRunsCompleted: (prevStats.agentRunsCompleted ?? 0) + 1,
                       agentJobsExtracted:
                         (prevStats.agentJobsExtracted ?? 0) + rawJobs.length,
+                      normalizedJobs:
+                        (prevStats.normalizedJobs ?? 0) + merged.addedNormalizedCount,
                       uniqueJobs: merged.totalUniqueJobs,
                       eligibleJobs: merged.totalEligibleJobs,
+                      filteredJobs: merged.totalFilteredJobs,
                     },
                   };
                 });
@@ -376,12 +382,13 @@ export default function HomePage() {
             <div className="mb-6 flex flex-wrap items-baseline justify-between gap-2 border-b border-zinc-800/80 pb-4">
               <div>
                 <h2 className="text-2xl font-bold text-white tracking-tight">
-                  {data.stats ? `${data.stats.eligibleJobs} jobs matched` : `${filteredJobs.length} jobs matched`}
+                  {selectedWorkMode !== 'All' && filteredJobs.length < (data.stats?.eligibleJobs ?? jobs.length)
+                    ? `Showing ${filteredJobs.length} of ${data.stats?.eligibleJobs ?? jobs.length} matched jobs`
+                    : `${data.stats?.eligibleJobs ?? jobs.length} jobs matched`}
                 </h2>
                 {data.stats && (
                   <p className="text-xs text-zinc-400 mt-0.5">
-                    {data.stats.uniqueJobs} unique jobs found ·{' '}
-                    {data.stats.uniqueJobs - data.stats.eligibleJobs} filtered by criteria · verified live
+                    {data.stats.uniqueJobs} unique jobs · {data.stats.filteredJobs ?? (data.stats.uniqueJobs - data.stats.eligibleJobs)} filtered · verified live
                   </p>
                 )}
               </div>

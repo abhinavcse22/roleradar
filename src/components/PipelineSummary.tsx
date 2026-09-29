@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, FileText, Bot, GitMerge, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { Search, FileText, Bot, GitMerge, CheckCircle2, ShieldAlert, Filter } from 'lucide-react';
 import { PipelineStats } from '@/lib/pipeline/types';
 
 interface PipelineSummaryProps {
@@ -8,6 +8,16 @@ interface PipelineSummaryProps {
 }
 
 export function PipelineSummary({ stats, executedAt }: PipelineSummaryProps) {
+  const runningAgents = Math.max(
+    0,
+    (stats.agentRunsStarted ?? 0) - (stats.agentRunsCompleted ?? 0) - (stats.agentFailures ?? 0)
+  );
+
+  const filteredCount =
+    stats.filteredJobs !== undefined
+      ? stats.filteredJobs
+      : Math.max(0, stats.uniqueJobs - stats.eligibleJobs);
+
   return (
     <div className="p-5 rounded-2xl bg-zinc-900/60 border border-zinc-800 mb-8 backdrop-blur-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4 pb-3 border-b border-zinc-800/70">
@@ -34,7 +44,9 @@ export function PipelineSummary({ stats, executedAt }: PipelineSummaryProps) {
           <div className="text-lg font-bold text-white font-mono">
             {stats.searchResults}
           </div>
-          <div className="text-[11px] text-zinc-500">sources discovered</div>
+          <div className="text-[11px] text-zinc-500">
+            live results · {stats.searchQueries ?? 5} query vectors
+          </div>
         </div>
 
         {/* Stage 2: Fetch */}
@@ -46,7 +58,9 @@ export function PipelineSummary({ stats, executedAt }: PipelineSummaryProps) {
           <div className="text-lg font-bold text-white font-mono">
             {stats.fetchedPages}
           </div>
-          <div className="text-[11px] text-zinc-500">pages full-browser read</div>
+          <div className="text-[11px] text-zinc-500">
+            {stats.fetchAttempted ?? stats.fetchedPages} attempted · {stats.fetchedPages} verified
+          </div>
         </div>
 
         {/* Stage 3: Agent */}
@@ -56,16 +70,14 @@ export function PipelineSummary({ stats, executedAt }: PipelineSummaryProps) {
             <span className="font-semibold">Agent</span>
           </div>
           <div className="text-lg font-bold text-white font-mono">
-            {stats.agentRunsStarted !== undefined
-              ? `${stats.agentRunsCompleted ?? stats.agentRuns}/${stats.agentRunsStarted}`
-              : stats.agentRuns}
+            {stats.agentRunsStarted !== undefined && stats.agentRunsStarted > 0
+              ? `${stats.agentRunsCompleted ?? 0} / ${stats.agentRunsStarted}`
+              : stats.agentRunsCompleted ?? stats.agentRuns ?? 0}
           </div>
           <div className="text-[11px] text-zinc-500">
-            {stats.agentJobsExtracted !== undefined && stats.agentJobsExtracted > 0
-              ? `${stats.agentJobsExtracted} jobs extracted`
-              : stats.agentRunsStarted !== undefined && stats.agentRunsStarted > 0 && (stats.agentRunsCompleted ?? 0) < stats.agentRunsStarted
-              ? 'hubs exploring...'
-              : 'career hubs explored'}
+            {stats.agentRunsStarted !== undefined && stats.agentRunsStarted > 0 && runningAgents > 0
+              ? `${runningAgents} running · ${stats.agentJobsExtracted ?? 0} jobs added`
+              : `${stats.agentJobsExtracted ?? 0} jobs added${stats.agentFailures > 0 ? ` · ${stats.agentFailures} failed` : ''}`}
           </div>
         </div>
 
@@ -78,7 +90,7 @@ export function PipelineSummary({ stats, executedAt }: PipelineSummaryProps) {
           <div className="text-lg font-bold text-white font-mono">
             {stats.normalizedJobs} → {stats.uniqueJobs}
           </div>
-          <div className="text-[11px] text-zinc-500">raw to unique listings</div>
+          <div className="text-[11px] text-zinc-500">records → unique jobs</div>
         </div>
 
         {/* Stage 5: Matching */}
@@ -88,18 +100,30 @@ export function PipelineSummary({ stats, executedAt }: PipelineSummaryProps) {
             <span className="font-semibold">Matching</span>
           </div>
           <div className="text-lg font-bold text-white font-mono">
-            {stats.eligibleJobs}
+            {stats.uniqueJobs} → {stats.eligibleJobs}
           </div>
-          <div className="text-[11px] text-zinc-500">ranked eligible jobs</div>
+          <div className="text-[11px] text-zinc-500">unique → eligible</div>
         </div>
       </div>
 
-      {stats.failedSources > 0 && (
-        <div className="mt-3 pt-3 border-t border-zinc-800/60 flex items-center gap-2 text-xs text-zinc-500">
-          <ShieldAlert className="w-3.5 h-3.5 text-amber-500" />
-          <span>
-            {stats.failedSources} source(s) were unavailable or timed out; pipeline continued with active sources without interruption.
-          </span>
+      {(filteredCount > 0 || stats.failedSources > 0) && (
+        <div className="mt-3 pt-3 border-t border-zinc-800/60 space-y-1 text-xs text-zinc-500">
+          {filteredCount > 0 && (
+            <div className="flex items-center gap-2">
+              <Filter className="w-3.5 h-3.5 text-blue-400/80 shrink-0" />
+              <span>
+                {filteredCount} unique job{filteredCount !== 1 ? 's' : ''} filtered out by hard criteria (role, location, eligibility).
+              </span>
+            </div>
+          )}
+          {stats.failedSources > 0 && (
+            <div className="flex items-center gap-2">
+              <ShieldAlert className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span>
+                {stats.failedSources} source(s) were unavailable or timed out; pipeline continued with active sources without interruption.
+              </span>
+            </div>
+          )}
         </div>
       )}
     </div>
