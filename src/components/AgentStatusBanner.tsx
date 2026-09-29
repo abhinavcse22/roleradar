@@ -39,9 +39,9 @@ export function AgentStatusBanner({ runs, onCancelAll }: AgentStatusBannerProps)
     }
   } else {
     if (completedRuns > 0) {
-      summaryText = `${completedRuns} completed · ${activeRuns.length} running`;
+      summaryText = `${totalRuns} career portals exploring · ${completedRuns} completed · ${activeRuns.length} running`;
     } else {
-      summaryText = `${totalRuns} career portal${totalRuns > 1 ? 's' : ''} exploring`;
+      summaryText = `${totalRuns} career portal${totalRuns > 1 ? 's' : ''} exploring · ${activeRuns.length} running`;
     }
   }
 

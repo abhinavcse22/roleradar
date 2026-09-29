@@ -22,23 +22,28 @@ export function FiltersBar({
   const modes: ('All' | WorkMode)[] = ['All', 'Remote', 'Hybrid', 'On-site'];
 
   return (
-    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 py-4 mb-6 border-b border-zinc-800/80">
-      {/* Count Indicator */}
-      <div className="text-sm text-zinc-300">
-        Showing <strong className="text-white font-semibold">{filteredCount}</strong> of{' '}
-        <span className="text-zinc-400">{totalCount} matched jobs</span>
+    <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 py-3 mb-5 border-b border-zinc-800/80">
+      {/* Clear Count Indicator: Server Telemetry vs Client View */}
+      <div className="text-xs text-zinc-400">
+        <span className="text-zinc-500 font-mono mr-2">Pipeline:</span>
+        <strong className="text-white font-semibold font-mono">{totalCount}</strong> eligible jobs
+        {filteredCount !== totalCount && (
+          <span className="ml-2 pl-2 border-l border-zinc-800 text-cyan-300">
+            Current view: <strong className="font-semibold font-mono">{filteredCount}</strong> shown
+          </span>
+        )}
       </div>
 
-      {/* Controls */}
-      <div className="flex flex-wrap items-center gap-3">
+      {/* Visually secondary controls */}
+      <div className="flex flex-wrap items-center gap-2.5">
         {/* Work Mode Filter */}
-        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-zinc-900 border border-zinc-800 text-xs">
-          <Filter className="w-3.5 h-3.5 text-zinc-500 ml-1.5" />
+        <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs">
+          <Filter className="w-3 h-3 text-zinc-500 ml-1.5" />
           {modes.map((mode) => (
             <button
               key={mode}
               onClick={() => onWorkModeChange(mode)}
-              className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+              className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer text-xs ${
                 selectedWorkMode === mode
                   ? 'bg-zinc-800 text-cyan-300 font-medium'
                   : 'text-zinc-400 hover:text-zinc-200'
@@ -50,11 +55,11 @@ export function FiltersBar({
         </div>
 
         {/* Sort Selector */}
-        <div className="flex items-center gap-1.5 p-1 rounded-xl bg-zinc-900 border border-zinc-800 text-xs">
-          <ArrowUpDown className="w-3.5 h-3.5 text-zinc-500 ml-1.5" />
+        <div className="flex items-center gap-1 p-0.5 rounded-lg bg-zinc-900 border border-zinc-800 text-xs">
+          <ArrowUpDown className="w-3 h-3 text-zinc-500 ml-1.5" />
           <button
             onClick={() => onSortChange('match')}
-            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+            className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer text-xs ${
               selectedSort === 'match'
                 ? 'bg-zinc-800 text-cyan-300 font-medium'
                 : 'text-zinc-400 hover:text-zinc-200'
@@ -64,7 +69,7 @@ export function FiltersBar({
           </button>
           <button
             onClick={() => onSortChange('freshness')}
-            className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${
+            className={`px-2 py-0.5 rounded-md transition-colors cursor-pointer text-xs ${
               selectedSort === 'freshness'
                 ? 'bg-zinc-800 text-cyan-300 font-medium'
                 : 'text-zinc-400 hover:text-zinc-200'

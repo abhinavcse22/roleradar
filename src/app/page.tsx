@@ -300,21 +300,21 @@ export default function HomePage() {
       {/* Main Content */}
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-10 w-full flex-1">
         {/* Compact Hero Section */}
-        <div className="mb-8 max-w-3xl">
-          <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-zinc-900 border border-zinc-800 text-xs text-zinc-300 font-medium mb-3">
-            <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+        <div className="mb-5 max-w-2xl">
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-zinc-900 border border-zinc-800 text-[11px] text-zinc-300 font-medium mb-2">
+            <Sparkles className="w-3 h-3 text-cyan-400" />
             <span>Live careers discovery across Ashby, Greenhouse, Lever &amp; company portals</span>
           </div>
-          <h1 className="text-3xl sm:text-4xl font-extrabold tracking-tight text-white mb-3">
+          <h1 className="text-2xl sm:text-3xl font-extrabold tracking-tight text-white mb-1.5">
             Find jobs that actually match you.
           </h1>
-          <p className="text-sm text-zinc-400 leading-relaxed">
-            RoleRadar searches live career pages and job portals, verifies openings, removes duplicates, and explains why each role matches your preferences.
+          <p className="text-xs text-zinc-400 leading-relaxed">
+            RoleRadar searches live career portals, verifies real openings, removes duplicates, and explains why each job matches your background.
           </p>
         </div>
 
         {/* Search Preferences Form */}
-        <div className="mb-10">
+        <div className="mb-6">
           <SearchForm
             isLoading={loading}
             onSearch={executeSearch}
@@ -323,13 +323,13 @@ export default function HomePage() {
 
         {/* Honest Initial Loading State */}
         {loading && (
-          <div className="py-16 text-center max-w-lg mx-auto space-y-6">
-            <div className="w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 mx-auto">
-              <Loader2 className="w-7 h-7 animate-spin" />
+          <div className="py-14 text-center max-w-lg mx-auto space-y-5">
+            <div className="w-12 h-12 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 mx-auto">
+              <Loader2 className="w-6 h-6 animate-spin" />
             </div>
 
             <div>
-              <h2 className="text-lg font-bold text-white mb-1.5">
+              <h2 className="text-base font-bold text-white mb-1">
                 Searching live career pages...
               </h2>
               <p className="text-xs text-zinc-400 leading-relaxed">
@@ -338,20 +338,20 @@ export default function HomePage() {
             </div>
 
             {/* 3-Step Conceptual Progression */}
-            <div className="grid grid-cols-3 gap-2 pt-2 text-xs font-mono">
-              <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800 text-cyan-300">
-                <Search className="w-4 h-4 mx-auto mb-1 text-cyan-400" />
-                <span className="font-semibold block">1. Search</span>
+            <div className="grid grid-cols-3 gap-2 pt-1 text-xs font-mono">
+              <div className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-cyan-300">
+                <Search className="w-3.5 h-3.5 mx-auto mb-1 text-cyan-400" />
+                <span className="font-semibold block text-[11px]">1. Search</span>
                 <span className="text-[10px] text-zinc-500">Live discovery</span>
               </div>
-              <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800 text-emerald-300">
-                <FileText className="w-4 h-4 mx-auto mb-1 text-emerald-400" />
-                <span className="font-semibold block">2. Fetch</span>
+              <div className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-emerald-300">
+                <FileText className="w-3.5 h-3.5 mx-auto mb-1 text-emerald-400" />
+                <span className="font-semibold block text-[11px]">2. Fetch</span>
                 <span className="text-[10px] text-zinc-500">Verify postings</span>
               </div>
-              <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800 text-purple-300">
-                <Bot className="w-4 h-4 mx-auto mb-1 text-purple-400" />
-                <span className="font-semibold block">3. Agent</span>
+              <div className="p-2.5 rounded-xl bg-zinc-900 border border-zinc-800 text-purple-300">
+                <Bot className="w-3.5 h-3.5 mx-auto mb-1 text-purple-400" />
+                <span className="font-semibold block text-[11px]">3. Agent</span>
                 <span className="text-[10px] text-zinc-500">Async hub explore</span>
               </div>
             </div>
@@ -379,20 +379,35 @@ export default function HomePage() {
         {data && !loading && !error && (
           <div>
             {/* Results Header */}
-            <div className="mb-6 flex flex-wrap items-baseline justify-between gap-2 border-b border-zinc-800/80 pb-4">
-              <div>
-                <h2 className="text-2xl font-bold text-white tracking-tight">
-                  {selectedWorkMode !== 'All' && filteredJobs.length < (data.stats?.eligibleJobs ?? jobs.length)
-                    ? `Showing ${filteredJobs.length} of ${data.stats?.eligibleJobs ?? jobs.length} matched jobs`
-                    : `${data.stats?.eligibleJobs ?? jobs.length} jobs matched`}
-                </h2>
-                {data.stats && (
-                  <p className="text-xs text-zinc-400 mt-0.5">
-                    {data.stats.uniqueJobs} unique jobs · {data.stats.filteredJobs ?? (data.stats.uniqueJobs - data.stats.eligibleJobs)} filtered · verified live
-                  </p>
-                )}
-              </div>
-            </div>
+            {(() => {
+              const pendingAgentCount = activeRuns.filter(
+                (r) => r.status === 'PENDING' || r.status === 'RUNNING'
+              ).length;
+
+              return (
+                <div className="mb-4 flex flex-wrap items-baseline justify-between gap-2 border-b border-zinc-800/80 pb-3">
+                  <div>
+                    <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+                      {selectedWorkMode !== 'All' && filteredJobs.length < (data.stats?.eligibleJobs ?? jobs.length)
+                        ? `Showing ${filteredJobs.length} of ${data.stats?.eligibleJobs ?? jobs.length} matched jobs`
+                        : `${data.stats?.eligibleJobs ?? jobs.length} jobs matched`}
+                    </h2>
+                    {data.stats && (
+                      <p className="text-xs text-zinc-400 mt-0.5">
+                        {data.stats.uniqueJobs} unique jobs · {data.stats.filteredJobs ?? (data.stats.uniqueJobs - data.stats.eligibleJobs)} filtered · verified live
+                      </p>
+                    )}
+                  </div>
+
+                  {pendingAgentCount > 0 && (
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-purple-950/60 border border-purple-800/60 text-purple-300 text-xs font-mono">
+                      <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse" />
+                      <span>{pendingAgentCount} career portal{pendingAgentCount > 1 ? 's' : ''} still being explored</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Pipeline Statistics Summary */}
             {data.stats && (
