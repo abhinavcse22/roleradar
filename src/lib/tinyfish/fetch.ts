@@ -43,19 +43,36 @@ export async function fetchTinyFish(
     throw new Error('Invalid URL. Must be a valid HTTP or HTTPS web address.');
   }
 
-  const response = await fetch(TINYFISH_FETCH_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'X-API-Key': apiKey.trim(),
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-    },
-    body: JSON.stringify({
-      urls: [trimmedUrl],
-      format: options?.format || 'markdown',
-    }),
-    cache: 'no-store',
-  });
+  const timeoutMs = options?.timeoutMs ?? 12000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`TinyFish Fetch timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(TINYFISH_FETCH_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'X-API-Key': apiKey.trim(),
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      },
+      body: JSON.stringify({
+        urls: [trimmedUrl],
+        format: options?.format || 'markdown',
+      }),
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+  } catch (err: unknown) {
+    if (controller.signal.aborted) {
+      throw new Error(`TinyFish Fetch timed out after ${timeoutMs}ms.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     let errorDetails = '';

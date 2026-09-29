@@ -76,21 +76,38 @@ export async function runTinyFishAgent(
     keywords: params.keywords || [],
   });
 
-  const response = await fetch(TINYFISH_AGENT_SSE_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'X-API-Key': apiKey.trim(),
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    },
-    body: JSON.stringify({
-      url: targetUrl,
-      goal,
-    }),
-    cache: 'no-store',
-  });
+  const timeoutMs = params.timeoutMs ?? 25000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`TinyFish Agent timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(TINYFISH_AGENT_SSE_ENDPOINT, {
+      method: 'POST',
+      headers: {
+        'X-API-Key': apiKey.trim(),
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+      },
+      body: JSON.stringify({
+        url: targetUrl,
+        goal,
+      }),
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+  } catch (err: unknown) {
+    clearTimeout(timeoutId);
+    if (controller.signal.aborted) {
+      throw new Error(`TinyFish Agent timed out after ${timeoutMs}ms.`);
+    }
+    throw err;
+  }
 
   if (!response.ok) {
+    clearTimeout(timeoutId);
     let errorDetails = '';
     try {
       const errJson = (await response.json()) as Record<string, unknown>;
@@ -110,6 +127,7 @@ export async function runTinyFishAgent(
   }
 
   if (!response.body) {
+    clearTimeout(timeoutId);
     throw new Error('TinyFish Agent SSE response did not contain a readable body.');
   }
 
@@ -123,9 +141,10 @@ export async function runTinyFishAgent(
   let runId: string | undefined;
   let finalResult: unknown;
   let agentError: string | undefined;
+  let isTerminalEvent = false;
 
   try {
-    while (true) {
+    while (!isTerminalEvent) {
       const { done, value } = await reader.read();
       if (done) break;
 
@@ -156,8 +175,13 @@ export async function runTinyFishAgent(
 
           params.onProgress?.(event);
 
-          if (eventType === 'COMPLETE') {
-            finalStatus = event.status || 'COMPLETED';
+          if (
+            eventType === 'COMPLETE' ||
+            event.status === 'COMPLETED' ||
+            event.status === 'FAILED'
+          ) {
+            finalStatus =
+              event.status || (eventType === 'COMPLETE' ? 'COMPLETED' : 'UNKNOWN');
             finalResult = event.result;
 
             if (event.error) {
@@ -166,16 +190,28 @@ export async function runTinyFishAgent(
                   ? event.error
                   : event.error.message || JSON.stringify(event.error);
             }
+            isTerminalEvent = true;
+            break;
           }
         } catch {
           // Ignore unparseable individual SSE data chunks defensively
         }
       }
     }
-  } catch (err) {
+  } catch (err: unknown) {
+    if (controller.signal.aborted) {
+      throw new Error(`TinyFish Agent timed out after ${timeoutMs}ms.`);
+    }
     throw new Error(
       `Stream reading error: ${err instanceof Error ? err.message : 'Unknown stream error'}`
     );
+  } finally {
+    clearTimeout(timeoutId);
+    try {
+      await reader.cancel();
+    } catch {
+      // Defensively ignore reader cancellation error if already closed
+    }
   }
 
   // Parse structured jobs from finalResult

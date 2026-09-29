@@ -41,15 +41,32 @@ export async function searchTinyFish(
     url.searchParams.set('language', options.language);
   }
 
-  const response = await fetch(url.toString(), {
-    method: 'GET',
-    headers: {
-      'X-API-Key': apiKey.trim(),
-      Accept: 'application/json',
-    },
-    // Avoid caching in discovery workflows
-    cache: 'no-store',
-  });
+  const timeoutMs = options?.timeoutMs ?? 10000;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    controller.abort(new Error(`TinyFish Search timed out after ${timeoutMs}ms`));
+  }, timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(url.toString(), {
+      method: 'GET',
+      headers: {
+        'X-API-Key': apiKey.trim(),
+        Accept: 'application/json',
+      },
+      // Avoid caching in discovery workflows
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+  } catch (err: unknown) {
+    if (controller.signal.aborted) {
+      throw new Error(`TinyFish Search timed out after ${timeoutMs}ms.`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timeoutId);
+  }
 
   if (!response.ok) {
     let errorDetails = '';

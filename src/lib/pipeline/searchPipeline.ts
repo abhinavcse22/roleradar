@@ -111,7 +111,7 @@ export async function searchJobs(
   const rawSearchResults: NormalizedSearchResult[] = [];
 
   const searchSettled = await Promise.allSettled(
-    queries.map((q) => searchTinyFish(q))
+    queries.map((q) => searchTinyFish(q, { timeoutMs: 10000 }))
   );
 
   for (const res of searchSettled) {
@@ -171,7 +171,7 @@ export async function searchJobs(
       directUrlsToFetch,
       3, // Concurrency limit of 3
       async (url) => {
-        return await fetchTinyFish(url);
+        return await fetchTinyFish(url, { timeoutMs: 12000 });
       }
     );
 
@@ -195,7 +195,7 @@ export async function searchJobs(
   // -------------------------------------------------------------
   // 4. TinyFish Agent Phase (Dynamic Career Hubs)
   // -------------------------------------------------------------
-  // Run Agent selectively on top 1-2 discovered career hubs
+  // Run Agent selectively on top 1-2 discovered career hubs with safe timeout
   const careerHubsForAgent = careerHubCandidates
     .map((item) => item.url)
     .filter((url) => !handledUrls.has(canonicalizeUrl(url)))
@@ -211,6 +211,7 @@ export async function searchJobs(
           role: preferences.role,
           location: preferences.location,
           keywords: preferences.keywords || [],
+          timeoutMs: 20000, // 20s bounded timeout per Agent run
         });
       }
     );

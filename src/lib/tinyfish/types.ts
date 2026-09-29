@@ -30,6 +30,7 @@ export interface NormalizedSearchResult {
 export interface SearchOptions {
   location?: string;
   language?: string;
+  timeoutMs?: number;
 }
 
 // --- Fetch Types ---
@@ -129,5 +130,6 @@ export interface AgentRunParams {
   role: string;
   location: string;
   keywords: string[];
+  timeoutMs?: number;
   onProgress?: (event: TinyFishAgentSSEEvent) => void;
 }
