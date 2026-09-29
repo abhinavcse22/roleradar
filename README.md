@@ -203,19 +203,23 @@ Every job card displays explicit evidence tags:
 
 ---
 
-## 8. Deduplication Engine
+## 8. Job Normalization and Deduplication
 
-A common opening is often found on Google Search, ATS subdomains, and company main domains simultaneously. RoleRadar deduplicates using a multi-factor canonical signature:
+Search, Fetch, and Agent can discover the same opening through different URLs or representations. RoleRadar therefore converts all source records into one canonical `JobListing` model and deterministically deduplicates them using normalized URLs and company/title/location fingerprints.
 
-1. **Normalized Company Name**: Strips `Inc`, `LLC`, `Corp`, whitespace, and casing (`"Stripe, Inc."` &rarr; `"stripe"`).
-2. **Normalized Title**: Strips level prefixes, department tags, and emojis (`"Senior Software Engineer - Payments (Remote)"` &rarr; `"senior software engineer payments"`).
-3. **Canonical Location**: Standardizes city, country, or `"remote"`.
-4. **URL Normalization**: Strips tracking query parameters (`gh_jid`, `utm_source`, `ref`, `lever-source`).
+### Canonical Multi-Signal Deduplication
+1. **Normalized Canonical URL**: Strips tracking parameters (`utm_*`, `gh_src`, `ref`, `fbclid`), trailing slashes, and anchor hashes while preserving meaningful route IDs.
+2. **Company Fingerprinting**: Normalizes corporate designations (`Inc`, `LLC`, `Pvt Ltd`, `Corp`) and casing (`"Sarvam AI, Inc."` &rarr; `"sarvam ai"`).
+3. **Exact Title Alignment**: Strict title matching distinguishes distinct levels (`Product Manager` vs `Senior Product Manager`).
+4. **Location Compatibility**: Geographic comparison prevents merging disparate office locations (`Bengaluru` vs `London`).
 
-When duplicates are detected, RoleRadar merges them:
-- Preserves the direct apply URL.
-- Merges discovered source tags (`["Ashby", "Company Careers"]`).
-- Records the freshest verification timestamp (`checkedAt`).
+### Deterministic Merging
+When multiple records represent the same role (e.g. Search snippet + Fetch page content + Agent structured data), RoleRadar combines them without data loss:
+- **Title & Company**: Authoritative representation preserved.
+- **Description**: Longest, most informative markdown text retained.
+- **Requirements & Keywords**: Union set of all unique requirements and detected skills.
+- **Apply URL**: Prefers authentic, direct ATS endpoints (`ashbyhq.com`, `greenhouse.io`, `/application`).
+- **Provenance**: Records the entire discovery history across all contributing pipeline stages.
 
 ---
 
