@@ -56,9 +56,17 @@ export function PipelineSummary({ stats, executedAt }: PipelineSummaryProps) {
             <span className="font-semibold">Agent</span>
           </div>
           <div className="text-lg font-bold text-white font-mono">
-            {stats.agentRuns}
+            {stats.agentRunsStarted !== undefined
+              ? `${stats.agentRunsCompleted ?? stats.agentRuns}/${stats.agentRunsStarted}`
+              : stats.agentRuns}
           </div>
-          <div className="text-[11px] text-zinc-500">career hubs navigated</div>
+          <div className="text-[11px] text-zinc-500">
+            {stats.agentJobsExtracted !== undefined && stats.agentJobsExtracted > 0
+              ? `${stats.agentJobsExtracted} jobs extracted`
+              : stats.agentRunsStarted !== undefined && stats.agentRunsStarted > 0 && (stats.agentRunsCompleted ?? 0) < stats.agentRunsStarted
+              ? 'hubs exploring...'
+              : 'career hubs explored'}
+          </div>
         </div>
 
         {/* Stage 4: Deduplication */}

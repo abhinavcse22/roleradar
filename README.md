@@ -54,6 +54,43 @@ Rank
 
 ---
 
+## Asynchronous Agent Architecture
+
+### Overview
+In production job discovery, interactive browser workflows and dynamic career hubs (e.g. Lever, Ashby, Greenhouse company portals) may take substantially longer (60–180+ seconds) than simple HTTP search or fetch requests. RoleRadar decouples immediate discovery from deep browser automation using an **asynchronous Agent architecture**:
+
+1. **Search and Fetch provide the initial result set**: When a candidate initiates a search, TinyFish Search and TinyFish Fetch execute synchronously, returning verified direct job postings within 2–5 seconds.
+2. **Dynamic Career Hubs are submitted to TinyFish Agent asynchronously**: High-relevance candidate career hubs are submitted in parallel via `POST https://agent.tinyfish.ai/v1/automation/run-async`, returning unique `runId` descriptors without blocking the initial HTTP response.
+3. **The browser polls run status**: The frontend receives initial jobs and begins polling `GET /api/jobs/agent-status?runId=<id>` (which queries `GET https://agent.tinyfish.ai/v1/runs/{id}`) at a 5-second interval. An honest Agent status banner displays real-time progress (`PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`).
+4. **Completed Agent results merge smoothly**: As each Agent run completes, its structured positions are normalized, deduplicated with existing jobs (merging provenance and preserving highest-authority fields), rescored against user preferences, and reranked deterministically. Results update live in the UI without a page refresh.
+5. **Safe In-Flight Cancellation**: Starting a new search or clearing preferences automatically cancels pending Agent tasks via `POST /api/jobs/agent-cancel` (which triggers `POST https://agent.tinyfish.ai/v1/runs/{id}/cancel`).
+
+### Pipeline Progression Diagram
+```
+Search
+ ↓
+Fetch
+ ↓
+Initial results
+ ↓
+Async Agent runs
+ ↓
+Agent status polling
+ ↓
+Merge
+ ↓
+Deduplicate
+ ↓
+Rescore
+ ↓
+Rerank
+```
+
+### Why Agent is Asynchronous
+Interactive browser workflows may take substantially longer than simple Search/Fetch requests. Direct job postings can be scraped and markdown-extracted in milliseconds, but navigating client-rendered Single-Page Applications (SPAs), interacting with filter forms, and extracting open positions from dynamic career portals requires autonomous multi-step browser sessions. Making Agent execution asynchronous ensures candidates receive immediate, actionable results without waiting, while deep autonomous navigation continues enriching their feed in the background.
+
+---
+
 ## 3. Architecture
 
 RoleRadar is built on a modern, high-performance, and minimal tech stack:

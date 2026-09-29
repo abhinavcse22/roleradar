@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import {
   Compass,
@@ -12,10 +12,17 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { UserPreferences } from '@/lib/matching/types';
-import { PipelineStats, ScoredJobListing } from '@/lib/pipeline/types';
+import {
+  AsyncAgentRunDescriptor,
+  PipelineStats,
+  ScoredJobListing,
+} from '@/lib/pipeline/types';
 import { WorkMode } from '@/lib/jobs/types';
+import { AgentJobItem } from '@/lib/tinyfish/types';
+import { mergeAgentResults } from '@/lib/pipeline/mergeAgentResults';
 import { SearchForm } from '@/components/SearchForm';
 import { PipelineSummary } from '@/components/PipelineSummary';
+import { AgentStatusBanner, ActiveAgentRunState } from '@/components/AgentStatusBanner';
 import { FiltersBar } from '@/components/FiltersBar';
 import { JobCard } from '@/components/JobCard';
 import { EmptyState } from '@/components/EmptyState';
@@ -26,6 +33,7 @@ interface ApiResponse {
   jobs?: ScoredJobListing[];
   stats?: PipelineStats;
   executedAt?: string;
+  agentRuns?: AsyncAgentRunDescriptor[];
   error?: string;
 }
 
@@ -34,23 +42,36 @@ export default function HomePage() {
   const [data, setData] = useState<ApiResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [lastPreferences, setLastPreferences] = useState<UserPreferences | null>(null);
+  const [activeRuns, setActiveRuns] = useState<ActiveAgentRunState[]>([]);
 
   // Client-side filter & sort state
   const [selectedWorkMode, setSelectedWorkMode] = useState<'All' | WorkMode>('All');
   const [selectedSort, setSelectedSort] = useState<'match' | 'freshness'>('match');
 
   const executeSearch = async (preferences: UserPreferences) => {
+    // 1. Cancel any prior in-flight background agent runs
+    activeRuns
+      .filter((r) => r.status === 'PENDING' || r.status === 'RUNNING')
+      .forEach((r) => {
+        fetch('/api/jobs/agent-cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runId: r.runId }),
+        }).catch(() => {});
+      });
+
     setLoading(true);
     setError(null);
     setLastPreferences(preferences);
+    setActiveRuns([]);
 
     const controller = new AbortController();
     const clientTimeout = setTimeout(() => {
       controller.abort();
-    }, 45000); // 45s safety timeout
+    }, 25000); // 25s timeout for initial Search + Fetch response
 
     try {
-      const response = await fetch('/api/jobs/search', {
+      const response = await fetch('/api/jobs/search/start', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -73,9 +94,15 @@ export default function HomePage() {
       }
 
       setData(json);
+      const initialRuns: ActiveAgentRunState[] = (json.agentRuns || []).map((r) => ({
+        runId: r.runId,
+        url: r.url,
+        status: r.status,
+      }));
+      setActiveRuns(initialRuns);
     } catch (err: unknown) {
       if (err instanceof Error && err.name === 'AbortError') {
-        setError('Search request timed out after 45 seconds. Please try again.');
+        setError('Initial search request timed out. Please try again.');
       } else {
         setError(
           err instanceof Error
@@ -87,6 +114,135 @@ export default function HomePage() {
       clearTimeout(clientTimeout);
       setLoading(false);
     }
+  };
+
+  // Poll active agent runs every 5 seconds until terminal
+  useEffect(() => {
+    const pendingRuns = activeRuns.filter(
+      (r) => r.status === 'PENDING' || r.status === 'RUNNING'
+    );
+    if (pendingRuns.length === 0) return;
+
+    const intervalId = setInterval(async () => {
+      for (const run of pendingRuns) {
+        try {
+          const res = await fetch(
+            `/api/jobs/agent-status?runId=${encodeURIComponent(run.runId)}&url=${encodeURIComponent(run.url)}`
+          );
+          if (!res.ok) continue;
+          const statusData = (await res.json()) as {
+            success: boolean;
+            status: string;
+            jobs?: AgentJobItem[];
+            error?: string | null;
+          };
+
+          if (!statusData.success) continue;
+
+          const newStatus = (statusData.status || '').toUpperCase();
+          if (newStatus !== run.status) {
+            if (newStatus === 'COMPLETED') {
+              const rawJobs = statusData.jobs || [];
+              if (lastPreferences) {
+                setData((prev) => {
+                  if (!prev || !prev.jobs) return prev;
+                  const merged = mergeAgentResults(prev.jobs, rawJobs, lastPreferences);
+                  const prevStats = prev.stats || {
+                    searchResults: 0,
+                    directJobCandidates: 0,
+                    careerHubCandidates: 0,
+                    fetchedPages: 0,
+                    agentRuns: 0,
+                    agentRunsStarted: activeRuns.length,
+                    agentRunsCompleted: 0,
+                    agentFailures: 0,
+                    agentJobsExtracted: 0,
+                    normalizedJobs: 0,
+                    uniqueJobs: 0,
+                    eligibleJobs: 0,
+                    failedSources: 0,
+                  };
+                  return {
+                    ...prev,
+                    jobs: merged.jobs,
+                    stats: {
+                      ...prevStats,
+                      agentRuns: (prevStats.agentRuns ?? 0) + 1,
+                      agentRunsCompleted: (prevStats.agentRunsCompleted ?? 0) + 1,
+                      agentJobsExtracted:
+                        (prevStats.agentJobsExtracted ?? 0) + rawJobs.length,
+                      uniqueJobs: merged.totalUniqueJobs,
+                      eligibleJobs: merged.totalEligibleJobs,
+                    },
+                  };
+                });
+              }
+              setActiveRuns((prevRuns) =>
+                prevRuns.map((r) =>
+                  r.runId === run.runId
+                    ? { ...r, status: 'COMPLETED', jobsExtracted: rawJobs.length }
+                    : r
+                )
+              );
+            } else if (newStatus === 'FAILED') {
+              setData((prev) => {
+                if (!prev || !prev.stats) return prev;
+                return {
+                  ...prev,
+                  stats: {
+                    ...prev.stats,
+                    agentFailures: (prev.stats.agentFailures ?? 0) + 1,
+                  },
+                };
+              });
+              setActiveRuns((prevRuns) =>
+                prevRuns.map((r) =>
+                  r.runId === run.runId
+                    ? { ...r, status: 'FAILED', error: statusData.error }
+                    : r
+                )
+              );
+            } else if (newStatus === 'CANCELLED') {
+              setActiveRuns((prevRuns) =>
+                prevRuns.map((r) =>
+                  r.runId === run.runId ? { ...r, status: 'CANCELLED' } : r
+                )
+              );
+            } else {
+              setActiveRuns((prevRuns) =>
+                prevRuns.map((r) =>
+                  r.runId === run.runId ? { ...r, status: newStatus } : r
+                )
+              );
+            }
+          }
+        } catch {
+          // Ignore transient polling fetch network error
+        }
+      }
+    }, 5000);
+
+    return () => clearInterval(intervalId);
+  }, [activeRuns, lastPreferences]);
+
+  const handleCancelAll = () => {
+    activeRuns
+      .filter((r) => r.status === 'PENDING' || r.status === 'RUNNING')
+      .forEach((r) => {
+        fetch('/api/jobs/agent-cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ runId: r.runId }),
+        }).catch(() => {});
+      });
+
+    setActiveRuns((prev) =>
+      prev.map((r) =>
+        r.status === 'PENDING' || r.status === 'RUNNING'
+          ? { ...r, status: 'CANCELLED' }
+          : r
+      )
+    );
   };
 
   // Filter and sort the loaded job set
@@ -159,7 +315,7 @@ export default function HomePage() {
           />
         </div>
 
-        {/* Honest Loading State */}
+        {/* Honest Initial Loading State */}
         {loading && (
           <div className="py-16 text-center max-w-lg mx-auto space-y-6">
             <div className="w-14 h-14 rounded-2xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center text-cyan-400 mx-auto">
@@ -171,7 +327,7 @@ export default function HomePage() {
                 Searching live career pages...
               </h2>
               <p className="text-xs text-zinc-400 leading-relaxed">
-                Discovering current openings, reading live job pages with TinyFish Fetch, and exploring dynamic career hubs with TinyFish Agent.
+                Discovering openings with TinyFish Search, reading postings with TinyFish Fetch, and launching background Agent exploration for dynamic career hubs.
               </p>
             </div>
 
@@ -190,7 +346,7 @@ export default function HomePage() {
               <div className="p-3 rounded-xl bg-zinc-900 border border-zinc-800 text-purple-300">
                 <Bot className="w-4 h-4 mx-auto mb-1 text-purple-400" />
                 <span className="font-semibold block">3. Agent</span>
-                <span className="text-[10px] text-zinc-500">Dynamic hubs</span>
+                <span className="text-[10px] text-zinc-500">Async hub explore</span>
               </div>
             </div>
           </div>
@@ -236,6 +392,14 @@ export default function HomePage() {
               <PipelineSummary
                 stats={data.stats}
                 executedAt={data.executedAt}
+              />
+            )}
+
+            {/* Live Async Agent Status Banner */}
+            {activeRuns.length > 0 && (
+              <AgentStatusBanner
+                runs={activeRuns}
+                onCancelAll={handleCancelAll}
               />
             )}
 

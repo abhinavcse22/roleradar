@@ -135,3 +135,34 @@ export interface AgentRunParams {
   timeoutMs?: number;
   onProgress?: (event: TinyFishAgentSSEEvent) => void;
 }
+
+export type TinyFishRunStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'COMPLETED'
+  | 'FAILED'
+  | 'CANCELLED'
+  | string;
+
+export interface AsyncAgentRunStartResult {
+  runId: string;
+  url: string;
+  status: TinyFishRunStatus;
+  error?: string | null;
+}
+
+export interface AsyncAgentRunStatusResult {
+  runId: string;
+  status: TinyFishRunStatus;
+  jobs: AgentJobItem[];
+  error?: string | null;
+  rawResult?: unknown;
+  finishedAt?: string | null;
+}
+
+export interface AsyncAgentCancelResult {
+  runId: string;
+  status: 'CANCELLED' | string;
+  cancelledAt?: string | null;
+  message?: string | null;
+}

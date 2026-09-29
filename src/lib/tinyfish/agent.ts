@@ -3,10 +3,16 @@ import {
   AgentRunParams,
   NormalizedAgentRunResult,
   TinyFishAgentSSEEvent,
+  AsyncAgentRunStartResult,
+  AsyncAgentRunStatusResult,
+  AsyncAgentCancelResult,
+  TinyFishRunStatus,
 } from './types';
 import { isValidHttpUrl } from './fetch';
 
 const TINYFISH_AGENT_SSE_ENDPOINT = 'https://agent.tinyfish.ai/v1/automation/run-sse';
+const TINYFISH_AGENT_ASYNC_ENDPOINT = 'https://agent.tinyfish.ai/v1/automation/run-async';
+const TINYFISH_RUNS_ENDPOINT = 'https://agent.tinyfish.ai/v1/runs';
 
 export function buildJobDiscoveryAgentGoal(params: {
   role: string;
@@ -224,7 +230,34 @@ export async function runTinyFishAgent(
     }
   }
 
-  // Parse structured jobs from finalResult (handling both object and serialized JSON string)
+  const jobs = parseAgentJobsFromResult(finalResult, targetUrl, params.location);
+
+  const isSuccess =
+    (finalStatus === 'COMPLETED' || finalStatus === 'COMPLETE') &&
+    (!agentError || agentError.length === 0);
+
+  return {
+    success: isSuccess,
+    runId,
+    status: finalStatus,
+    jobs,
+    rawResult: finalResult,
+    error: agentError,
+    eventsObserved,
+    lastPurpose,
+    checkedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Safely parses structured Agent job items from result, resultJson, or result_json payload.
+ * Supports both pre-parsed JSON objects and serialized JSON strings (including markdown code blocks).
+ */
+export function parseAgentJobsFromResult(
+  finalResult: unknown,
+  targetUrl: string,
+  fallbackLocation?: string
+): AgentJobItem[] {
   let parsedObj: Record<string, unknown> | null = null;
 
   if (typeof finalResult === 'string') {
@@ -267,7 +300,7 @@ export async function runTinyFishAgent(
         jobs.push({
           title,
           company: typeof j.company === 'string' ? j.company.trim() : '',
-          location: typeof j.location === 'string' ? j.location.trim() : params.location,
+          location: typeof j.location === 'string' ? j.location.trim() : (fallbackLocation || 'Remote'),
           employment_type: typeof j.employment_type === 'string' ? j.employment_type : null,
           work_mode: typeof j.work_mode === 'string' ? j.work_mode : null,
           description: typeof j.description === 'string' ? j.description.trim() : '',
@@ -284,19 +317,201 @@ export async function runTinyFishAgent(
     }
   }
 
-  const isSuccess =
-    (finalStatus === 'COMPLETED' || finalStatus === 'COMPLETE') &&
-    (!agentError || agentError.length === 0);
+  return jobs;
+}
+
+/**
+ * Submits an autonomous agent task asynchronously to TinyFish without waiting for completion.
+ * Endpoint: POST https://agent.tinyfish.ai/v1/automation/run-async
+ */
+export async function startTinyFishAgentAsync(params: {
+  url: string;
+  role: string;
+  location: string;
+  keywords: string[];
+}): Promise<AsyncAgentRunStartResult> {
+  const apiKey = process.env.TINYFISH_API_KEY;
+  if (!apiKey || apiKey.trim() === '') {
+    throw new Error('TINYFISH_API_KEY is not configured on the server.');
+  }
+
+  const targetUrl = params.url.trim();
+  if (!targetUrl || !isValidHttpUrl(targetUrl)) {
+    throw new Error('Invalid URL. Must be a valid HTTP or HTTPS address.');
+  }
+
+  const goal = buildJobDiscoveryAgentGoal({
+    role: params.role || 'Product Manager',
+    location: params.location || 'India',
+    keywords: params.keywords || [],
+  });
+
+  const response = await fetch(TINYFISH_AGENT_ASYNC_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'X-API-Key': apiKey.trim(),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      url: targetUrl,
+      goal,
+    }),
+    cache: 'no-store',
+  });
+
+  if (!response.ok) {
+    let errorDetails = '';
+    try {
+      const errJson = (await response.json()) as Record<string, unknown>;
+      errorDetails =
+        typeof errJson.message === 'string'
+          ? errJson.message
+          : typeof errJson.error === 'string'
+          ? errJson.error
+          : JSON.stringify(errJson);
+    } catch {
+      errorDetails = await response.text();
+    }
+    throw new Error(
+      `TinyFish run-async error (${response.status}): ${errorDetails || response.statusText}`
+    );
+  }
+
+  const data = (await response.json()) as Record<string, unknown>;
+  const runId = (data.run_id || data.runId || data.id) as string;
+
+  if (!runId || typeof runId !== 'string') {
+    throw new Error('TinyFish run-async did not return a valid run_id.');
+  }
 
   return {
-    success: isSuccess,
     runId,
-    status: finalStatus,
+    url: targetUrl,
+    status: ((data.status as string) || 'PENDING').toUpperCase() as TinyFishRunStatus,
+    error: (data.error as string) || null,
+  };
+}
+
+/**
+ * Retrieves the current status, progress, and result of an asynchronous TinyFish agent run.
+ * Endpoint: GET https://agent.tinyfish.ai/v1/runs/{run_id}
+ */
+export async function getTinyFishAgentRun(
+  runId: string,
+  targetUrl?: string,
+  fallbackLocation?: string
+): Promise<AsyncAgentRunStatusResult> {
+  const apiKey = process.env.TINYFISH_API_KEY;
+  if (!apiKey || apiKey.trim() === '') {
+    throw new Error('TINYFISH_API_KEY is not configured on the server.');
+  }
+
+  if (!runId || runId.trim() === '') {
+    throw new Error('Missing required runId parameter.');
+  }
+
+  const response = await fetch(
+    `${TINYFISH_RUNS_ENDPOINT}/${encodeURIComponent(runId.trim())}`,
+    {
+      method: 'GET',
+      headers: {
+        'X-API-Key': apiKey.trim(),
+      },
+      cache: 'no-store',
+    }
+  );
+
+  if (!response.ok) {
+    let errorDetails = '';
+    try {
+      const errJson = (await response.json()) as Record<string, unknown>;
+      errorDetails =
+        typeof errJson.message === 'string'
+          ? errJson.message
+          : typeof errJson.error === 'string'
+          ? errJson.error
+          : JSON.stringify(errJson);
+    } catch {
+      errorDetails = await response.text();
+    }
+    throw new Error(
+      `TinyFish runs/${runId} error (${response.status}): ${errorDetails || response.statusText}`
+    );
+  }
+
+  const data = (await response.json()) as Record<string, unknown>;
+  const status = ((data.status as string) || 'PENDING').toUpperCase() as TinyFishRunStatus;
+  const rawResult = data.resultJson ?? data.result ?? data.result_json;
+  const errorMsg =
+    typeof data.error === 'string'
+      ? data.error
+      : data.error && typeof data.error === 'object'
+      ? (data.error as Record<string, unknown>).message
+      : null;
+
+  let jobs: AgentJobItem[] = [];
+  if (status === 'COMPLETED' && rawResult) {
+    jobs = parseAgentJobsFromResult(rawResult, targetUrl || '', fallbackLocation);
+  }
+
+  return {
+    runId: (data.run_id as string) || runId,
+    status,
     jobs,
-    rawResult: finalResult,
-    error: agentError,
-    eventsObserved,
-    lastPurpose,
-    checkedAt: new Date().toISOString(),
+    error: (errorMsg as string) || null,
+    rawResult,
+    finishedAt: (data.finished_at as string) || null,
+  };
+}
+
+/**
+ * Cancels an in-flight asynchronous TinyFish agent run.
+ * Endpoint: POST https://agent.tinyfish.ai/v1/runs/{run_id}/cancel
+ */
+export async function cancelTinyFishAgentRun(runId: string): Promise<AsyncAgentCancelResult> {
+  const apiKey = process.env.TINYFISH_API_KEY;
+  if (!apiKey || apiKey.trim() === '') {
+    throw new Error('TINYFISH_API_KEY is not configured on the server.');
+  }
+
+  if (!runId || runId.trim() === '') {
+    throw new Error('Missing required runId parameter.');
+  }
+
+  const response = await fetch(
+    `${TINYFISH_RUNS_ENDPOINT}/${encodeURIComponent(runId.trim())}/cancel`,
+    {
+      method: 'POST',
+      headers: {
+        'X-API-Key': apiKey.trim(),
+      },
+      cache: 'no-store',
+    }
+  );
+
+  if (!response.ok) {
+    let errorDetails = '';
+    try {
+      const errJson = (await response.json()) as Record<string, unknown>;
+      errorDetails =
+        typeof errJson.message === 'string'
+          ? errJson.message
+          : typeof errJson.error === 'string'
+          ? errJson.error
+          : JSON.stringify(errJson);
+    } catch {
+      errorDetails = await response.text();
+    }
+    throw new Error(
+      `TinyFish cancel run error (${response.status}): ${errorDetails || response.statusText}`
+    );
+  }
+
+  const data = (await response.json()) as Record<string, unknown>;
+  return {
+    runId: (data.run_id as string) || runId,
+    status: ((data.status as string) || 'CANCELLED').toUpperCase(),
+    cancelledAt: (data.cancelled_at as string) || new Date().toISOString(),
+    message: (data.message as string) || null,
   };
 }

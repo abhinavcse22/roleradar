@@ -1,6 +1,6 @@
 import { searchTinyFish } from '../tinyfish/search';
 import { fetchTinyFish } from '../tinyfish/fetch';
-import { runTinyFishAgent } from '../tinyfish/agent';
+import { runTinyFishAgent, startTinyFishAgentAsync } from '../tinyfish/agent';
 import { NormalizedSearchResult } from '../tinyfish/types';
 import { JobListing } from '../jobs/types';
 import {
@@ -13,6 +13,7 @@ import { deduplicateJobs } from '../jobs/dedupe';
 import { scoreJobMatch } from '../matching/scoring';
 import { UserPreferences } from '../matching/types';
 import {
+  AsyncAgentRunDescriptor,
   PipelineStats,
   ScoredJobListing,
   SearchPipelineResult,
@@ -383,3 +384,232 @@ export async function searchJobs(
     executedAt,
   };
 }
+
+/**
+ * Starts an asynchronous End-to-End search:
+ * 1. Synchronously executes TinyFish Search and TinyFish Fetch (and search fallback normalization).
+ * 2. Immediately kicks off async TinyFish Agent jobs (up to 2) for dynamic career hubs without waiting.
+ * 3. Immediately returns initial scored jobs and agent run descriptors so the UI can render instantly and poll.
+ */
+export async function startSearchJobs(
+  preferences: UserPreferences
+): Promise<SearchPipelineResult> {
+  const executedAt = new Date().toISOString();
+
+  const stats: PipelineStats = {
+    searchResults: 0,
+    directJobCandidates: 0,
+    careerHubCandidates: 0,
+    fetchedPages: 0,
+    agentRuns: 0,
+    agentRunsStarted: 0,
+    agentRunsCompleted: 0,
+    agentFailures: 0,
+    agentJobsExtracted: 0,
+    normalizedJobs: 0,
+    uniqueJobs: 0,
+    eligibleJobs: 0,
+    failedSources: 0,
+  };
+
+  if (!preferences.role || preferences.role.trim() === '') {
+    throw new Error('User role preference is required.');
+  }
+  if (!preferences.location || preferences.location.trim() === '') {
+    throw new Error('User location preference is required.');
+  }
+
+  // -------------------------------------------------------------
+  // 1. TinyFish Search Phase
+  // -------------------------------------------------------------
+  const queries = generateSearchQueries(preferences);
+  const rawSearchResults: NormalizedSearchResult[] = [];
+
+  const searchSettled = await Promise.allSettled(
+    queries.map((q) => searchTinyFish(q, { timeoutMs: 10000 }))
+  );
+
+  for (const res of searchSettled) {
+    if (res.status === 'fulfilled') {
+      rawSearchResults.push(...res.value);
+    } else {
+      stats.failedSources++;
+    }
+  }
+
+  stats.searchResults = rawSearchResults.length;
+
+  // Deduplicate raw search results by canonical URL
+  const seenSearchUrls = new Set<string>();
+  const uniqueSearchResults: NormalizedSearchResult[] = [];
+
+  for (const item of rawSearchResults) {
+    const canonUrl = canonicalizeUrl(item.url);
+    if (canonUrl && !seenSearchUrls.has(canonUrl)) {
+      seenSearchUrls.add(canonUrl);
+      uniqueSearchResults.push(item);
+    }
+  }
+
+  // -------------------------------------------------------------
+  // 2. Search Result Classification Phase
+  // -------------------------------------------------------------
+  const directJobCandidates: NormalizedSearchResult[] = [];
+  const careerHubCandidates: NormalizedSearchResult[] = [];
+
+  for (const item of uniqueSearchResults) {
+    const category = classifyUrl(item.url);
+    if (category === 'directJob') {
+      directJobCandidates.push(item);
+    } else if (category === 'careerHub') {
+      careerHubCandidates.push(item);
+    }
+  }
+
+  stats.directJobCandidates = directJobCandidates.length;
+  stats.careerHubCandidates = careerHubCandidates.length;
+
+  const candidateJobListings: JobListing[] = [];
+  const handledUrls = new Set<string>();
+
+  // -------------------------------------------------------------
+  // 3. TinyFish Fetch Phase (Direct Job Postings)
+  // -------------------------------------------------------------
+  const directUrlsToFetch = directJobCandidates
+    .map((item) => item.url)
+    .filter(Boolean)
+    .slice(0, 6);
+
+  if (directUrlsToFetch.length > 0) {
+    const fetchSettled = await runWithConcurrency(
+      directUrlsToFetch,
+      3,
+      async (url) => {
+        return await fetchTinyFish(url, { timeoutMs: 12000 });
+      }
+    );
+
+    for (let i = 0; i < fetchSettled.length; i++) {
+      const res = fetchSettled[i];
+      const targetUrl = directUrlsToFetch[i];
+      handledUrls.add(canonicalizeUrl(targetUrl));
+
+      if (res.status === 'fulfilled') {
+        stats.fetchedPages++;
+        const normJob = normalizeFetchedJob(res.value);
+        if (normJob) {
+          candidateJobListings.push(normJob);
+        }
+      } else {
+        stats.failedSources++;
+      }
+    }
+  }
+
+  // -------------------------------------------------------------
+  // 4. Asynchronous TinyFish Agent Phase (Dynamic Career Hubs)
+  // -------------------------------------------------------------
+  const rankedHubs = rankCareerHubs(careerHubCandidates, preferences);
+  const careerHubsForAgent = rankedHubs
+    .filter((item) => !handledUrls.has(canonicalizeUrl(item.url)))
+    .slice(0, 2); // Concurrency cap: max 2 career hubs
+
+  const agentRuns: AsyncAgentRunDescriptor[] = [];
+
+  if (careerHubsForAgent.length > 0) {
+    const agentStartSettled = await Promise.allSettled(
+      careerHubsForAgent.map(async (hubItem) => {
+        const startResult = await startTinyFishAgentAsync({
+          url: hubItem.url,
+          role: preferences.role,
+          location: preferences.location,
+          keywords: preferences.keywords || [],
+        });
+        return {
+          runId: startResult.runId,
+          url: hubItem.url,
+          status: startResult.status,
+        };
+      })
+    );
+
+    for (let i = 0; i < agentStartSettled.length; i++) {
+      const res = agentStartSettled[i];
+      const targetUrl = careerHubsForAgent[i].url;
+      handledUrls.add(canonicalizeUrl(targetUrl));
+
+      if (res.status === 'fulfilled') {
+        agentRuns.push(res.value);
+      } else {
+        stats.agentFailures++;
+        stats.failedSources++;
+      }
+    }
+  }
+
+  stats.agentRunsStarted = agentRuns.length;
+  stats.agentRunsCompleted = 0;
+
+  // -------------------------------------------------------------
+  // 5. Fallback Search Normalization
+  // -------------------------------------------------------------
+  for (const item of uniqueSearchResults) {
+    const canonUrl = canonicalizeUrl(item.url);
+    if (!handledUrls.has(canonUrl)) {
+      const normJob = normalizeSearchResult(item);
+      if (normJob) {
+        candidateJobListings.push(normJob);
+      }
+    }
+  }
+
+  stats.normalizedJobs = candidateJobListings.length;
+
+  // -------------------------------------------------------------
+  // 6. Deduplication Phase
+  // -------------------------------------------------------------
+  const deduplicatedJobs = deduplicateJobs(candidateJobListings);
+  stats.uniqueJobs = deduplicatedJobs.length;
+
+  // -------------------------------------------------------------
+  // 7. Matching & Scoring Phase
+  // -------------------------------------------------------------
+  const scoredJobs: ScoredJobListing[] = [];
+  for (const job of deduplicatedJobs) {
+    const match = scoreJobMatch(job, preferences);
+    if (match.eligible) {
+      scoredJobs.push({
+        ...job,
+        match,
+      });
+    }
+  }
+
+  stats.eligibleJobs = scoredJobs.length;
+
+  // -------------------------------------------------------------
+  // 8. Deterministic Ranking Phase
+  // -------------------------------------------------------------
+  scoredJobs.sort((a, b) => {
+    if (b.match.score !== a.match.score) {
+      return b.match.score - a.match.score;
+    }
+    if (b.match.breakdown.role !== a.match.breakdown.role) {
+      return b.match.breakdown.role - a.match.breakdown.role;
+    }
+    if (b.match.breakdown.freshness !== a.match.breakdown.freshness) {
+      return b.match.breakdown.freshness - a.match.breakdown.freshness;
+    }
+    const keyA = `${a.title} ${a.company}`.toLowerCase();
+    const keyB = `${b.title} ${b.company}`.toLowerCase();
+    return keyA.localeCompare(keyB);
+  });
+
+  return {
+    jobs: scoredJobs,
+    stats,
+    executedAt,
+    agentRuns,
+  };
+}
+
