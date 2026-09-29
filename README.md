@@ -2,6 +2,9 @@
 
 > **"Tell me what kind of job you're looking for. RoleRadar searches live career pages, verifies real openings, removes duplicates, and explains why each job matches you."**
 
+**Live Demo**: [https://roleradar-iota.vercel.app](https://roleradar-iota.vercel.app)  
+**GitHub Repository**: [https://github.com/abhinavcse22/roleradar](https://github.com/abhinavcse22/roleradar)
+
 RoleRadar is a live job and internship discovery application built for the **TinyFish Technical Student Bounty Drop 001 — Job Portal / Careers Finder**. It replaces stale, generic aggregator boards with live, verified career discovery powered directly by TinyFish's tripartite web infrastructure: **Search**, **Fetch**, and **Agent**.
 
 ---
@@ -268,7 +271,7 @@ RoleRadar provides an honest, transparent breakdown of exactly what happened dur
 
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/your-username/roleradar.git
+   git clone https://github.com/abhinavcse22/roleradar.git
    cd roleradar
    ```
 
